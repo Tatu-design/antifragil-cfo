@@ -1,0 +1,31 @@
+{
+  "_comment": [
+    "PLANTILLA DE REGLAS DE CLASIFICACIÓN — datos de ejemplo, no reales.",
+    "",
+    "El catálogo real arranca VACÍO a propósito: hasta analizar el histórico",
+    "enero-julio 2026 del Cash Flow GEA y validar la taxonomía con el propietario,",
+    "todo gasto nuevo queda pendiente de clasificación manual.",
+    "",
+    "Una regla solo se aplica si está habilitada y su confianza alcanza minConfidence.",
+    "Si dos reglas dan resultados distintos, el apunte queda pendiente: un conflicto",
+    "de reglas lo resuelve una persona, no el motor.",
+    "",
+    "El campo 'note' es obligatorio: una regla sin motivo escrito no es auditable."
+  ],
+  "version": "0-ejemplo",
+  "minConfidence": 0.9,
+  "rules": [
+    {
+      "id": "ejemplo-recursos-digitales",
+      "contains": ["nombre-del-servicio"],
+      "excludes": [],
+      "treasury": "bank",
+      "appliesTo": "expense",
+      "category": "Recursos Digitales",
+      "pnl": "Opex Estructura",
+      "confidence": 1.0,
+      "enabled": false,
+      "note": "Ejemplo de estructura. Deshabilitada. Sustituir por reglas reales extraídas del histórico validado."
+    }
+  ]
+}

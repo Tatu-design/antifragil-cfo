@@ -1,0 +1,90 @@
+# ============================================================================
+# antifragil-cfo — .gitignore
+# ----------------------------------------------------------------------------
+# ⚠️  ESTE REPOSITORIO ES PÚBLICO.
+# Ningún dato financiero real puede llegar nunca a GitHub.
+# Regla: si un archivo contiene importes, facturas, extractos, nombres de
+# clientes/proveedores reales o credenciales → NO se versiona.
+# ============================================================================
+
+# --- dependencias -----------------------------------------------------------
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# --- next.js ----------------------------------------------------------------
+/.next/
+/out/
+/build
+next-env.d.ts
+
+# --- typescript / tooling ---------------------------------------------------
+*.tsbuildinfo
+/coverage
+.eslintcache
+
+# --- secretos y entorno -----------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+service-account*.json
+google-credentials*.json
+token.json
+credentials.json
+
+# --- vercel -----------------------------------------------------------------
+.vercel
+
+# ============================================================================
+# DATOS FINANCIEROS REALES — NUNCA SE VERSIONAN
+# ============================================================================
+
+# Zona de trabajo local: entradas reales, salidas, backups y logs.
+/local-data/**
+!/local-data/README.md
+!/local-data/.gitkeep
+
+# Cinturón y tirantes: cualquier documento financiero suelto en el repo,
+# esté donde esté, queda fuera salvo que sea una fixture sintética explícita.
+*.xlsx
+*.xls
+*.xlsm
+*.ods
+*.csv
+*.pdf
+*.numbers
+
+# Excepción: fixtures sintéticas de test (datos inventados, sin realidad
+# económica). Deben vivir en tests/fixtures/ y llamarse *.synthetic.*
+!tests/fixtures/**/*.synthetic.csv
+!tests/fixtures/**/*.synthetic.xlsx
+
+# Nombres de documentos reales conocidos (defensa adicional)
+*Cash Flow GEA*
+*Cuenta de cash*
+*Extracto*
+*extracto*
+*Ventas Clinica*
+*Ventas Clínica*
+G_*
+I_*
+
+# --- sistema ----------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# --- claude local -----------------------------------------------------------
+.claude/settings.local.json
