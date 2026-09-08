@@ -13,7 +13,7 @@
  */
 
 import { normalizeText } from "./text";
-import type { ClassificationStatus, Treasury } from "./types";
+import type { ClassificationStatus, TreasuryKind } from "./types";
 
 export interface ClassificationRule {
   /** Identificador estable citado en la auditoría de cada apunte. */
@@ -23,7 +23,7 @@ export interface ClassificationRule {
   /** Ninguna de estas palabras puede aparecer. Evita falsos positivos. */
   excludes?: string[];
   /** Si se indica, la regla solo aplica a esa tesorería. */
-  treasury?: Treasury;
+  treasury?: TreasuryKind;
   /** Solo aplica a gastos, a ingresos, o a ambos. */
   appliesTo?: "expense" | "income" | "both";
   category: string;
@@ -76,7 +76,7 @@ export function classify(
   concept: string,
   options: {
     ruleBook: RuleBook;
-    treasury: Treasury;
+    treasury: TreasuryKind;
     direction: "expense" | "income";
   },
 ): ClassificationResult {

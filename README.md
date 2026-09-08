@@ -2,10 +2,11 @@
 
 Sistema financiero interno de Antifrágil.
 
-Convierte extractos bancarios, facturas, ventas de clínica y movimientos de caja
-en un **ledger financiero trazable**, y el Cash Flow en una **vista calculada**
-sobre él. El cierre mensual pasa de ser búsqueda y copia manual a:
+**Misión actual:** conciliar todos los movimientos reales de tesorería —banco SL,
+banco SC y caja— con su documentación justificativa, y permitir revisar y clasificar
+las excepciones desde una interfaz.
 
+> El cierre mensual pasa de ser búsqueda y copia manual a:
 > **procesar → revisar excepciones → aprobar**
 
 ---
@@ -24,15 +25,18 @@ Todo dato real vive en `local-data/`, excluida por `.gitignore`.
 
 | Parte | Estado |
 |-------|--------|
-| Motor financiero (reglas, conciliación, incidencias, idempotencia) | ✅ Implementado y testeado |
-| Lectura de fuentes locales (XLSX/CSV) e informes de auditoría | ✅ Implementado |
-| Esquema Supabase con RLS | ✅ Escrito, pendiente de aplicar |
-| Inspección de los documentos reales de agosto 2026 | ⬜ Siguiente paso |
-| Persistencia en Supabase y cierre de mes | ⬜ Pendiente |
-| Integración con Google Drive | ⬜ Pendiente |
-| Interfaz operativa | ⬜ Después del MVP financiero |
+| Ledger multi-cuenta (SL, SC, caja) | ✅ Implementado y testeado |
+| Conciliación documental (4 cardinalidades, con evidencia) | ✅ Implementado y testeado |
+| Cola de excepciones y métricas MVP | ✅ Implementado y testeado |
+| Interfaz operativa de revisión (lectura) | ✅ Funcionando sobre datos locales |
+| Índice documental de Drive | 🟡 Motor y tests listos; falta credencial |
+| Persistencia en Supabase | 🟡 Esquema escrito; falta aplicarlo |
+| Clasificación desde la interfaz | ⬜ Siguiente |
+| Reconstrucción y comparación de agosto 2026 | 🟡 Motor listo; faltan los archivos reales |
+| Septiembre 2026 operativo | ⬜ Objetivo inmediato |
 
-Mes piloto: **agosto 2026**.
+Fuera del MVP por decisión explícita: Cash Flow operativo, EBITDA, balances,
+presupuestos, forecasting y reporting avanzado.
 
 ---
 
@@ -52,30 +56,37 @@ cp .env.example .env.local     # rellenar cuando exista el proyecto Supabase
 
 npm run check                  # typecheck + lint + tests
 npm run cfo -- demo            # el motor sobre datos sintéticos
-npm run dev                    # interfaz (mínima por ahora)
+npm run dev                    # interfaz de revisión
 ```
 
 ## Uso mensual
 
 ```bash
-npm run cfo -- inspect 2026-08   # lee las fuentes y explica cómo las ha entendido
-npm run cfo -- analyze 2026-08   # construye el ledger, concilia y genera informes
+npm run cfo -- inspect 2026-09   # lee las fuentes y explica cómo las ha entendido
+npm run cfo -- analyze 2026-09   # construye el ledger, concilia y genera informes
+npm run cfo -- compare 2026-08   # contrasta un mes con su cierre manual previo
 ```
+
+Después, `npm run dev` → `/periodo/2026-09` para revisar las excepciones.
 
 Ningún comando escribe sobre los documentos originales del negocio.
 
-Dónde dejar cada archivo y cómo revisar el resultado: **[docs/RUNBOOK.md](docs/RUNBOOK.md)**.
+Dónde dejar cada archivo: **[docs/RUNBOOK.md](docs/RUNBOOK.md)**.
 
 ---
 
 ## Reglas del dinero (resumen)
 
-- **Retirada de caja no es un ingreso.** Traspasos, saldos iniciales y transferencias internas tampoco: son tesorería, fuera del P&L.
-- **Datáfono**: se concilia por suma mensual (banco vs facturación de clínica), no factura a factura, y entra como **una sola línea consolidada**. Si no cuadra, se reporta la diferencia; **nunca se ajusta una cifra**.
+- **Tres tesorerías, un solo ledger**, y cada movimiento conserva su cuenta de origen.
+- **Documento justificativo, no solo factura**: nóminas, impuestos, Seguridad Social, recibos y hojas de ventas cuentan igual.
+- **No todo necesita documento**: comisiones, intereses y traspasos internos quedan en `not_document_required`, un estado final legítimo y no una excepción.
+- **Nunca se fuerza un match dudoso**, y toda asociación guarda método, confianza y motivos.
+- **Retirada de caja no es un ingreso.** Traspasos y saldos iniciales tampoco.
+- **Datáfono**: conciliado por suma mensual y consolidado en una sola línea. Si no cuadra, se reporta la diferencia; **nunca se ajusta una cifra**.
 - **Ventas cash de clínica**: salen de su Excel, nunca de las retiradas de caja.
-- **Prohibida la doble contabilización**: liquidaciones + facturas de venta son el mismo ingreso; movimiento bancario + factura son el mismo gasto.
-- **Una factura sin movimiento no se convierte en gasto**: se reporta como incidencia.
-- **Nada se clasifica sin una regla explícita.** Hoy el catálogo está vacío a propósito: la decisión contable es humana hasta validar la taxonomía histórica.
+- **Un documento sin movimiento no se convierte en gasto**: se reporta.
+- **Nada se clasifica sin una regla explícita.** La decisión contable es humana hasta validar la taxonomía histórica.
+- **Agosto 2026 es referencia, no verdad infalible**: se reconstruye, se compara, y cada diferencia la juzga una persona.
 - **Idempotencia**: procesar el mismo mes dos veces no duplica nada.
 - **Trazabilidad**: cada cifra sabe de qué archivo, hoja y fila viene.
 
@@ -88,10 +99,11 @@ Detalle completo: **[docs/FINANCIAL_RULES.md](docs/FINANCIAL_RULES.md)**.
 | Documento | Contenido |
 |-----------|-----------|
 | [docs/SYSTEM_VISION.md](docs/SYSTEM_VISION.md) | ⭐ Visión, contexto de negocio y decisiones cerradas |
-| [docs/FINANCIAL_RULES.md](docs/FINANCIAL_RULES.md) | Las reglas del dinero, que son la especificación del motor |
+| [docs/FINANCIAL_RULES.md](docs/FINANCIAL_RULES.md) | Las reglas del dinero: la especificación del motor |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Stack, estructura y decisiones técnicas |
-| [docs/DATA_MODEL.md](docs/DATA_MODEL.md) | Ledger, tablas, RLS e idempotencia |
+| [docs/DATA_MODEL.md](docs/DATA_MODEL.md) | Ledger, documentos, conciliación, RLS e idempotencia |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) | Operación mensual paso a paso |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Qué está hecho y el camino más corto a septiembre |
 | [CLAUDE.md](CLAUDE.md) | Instrucciones para Claude Code |
 
 ---
@@ -102,9 +114,7 @@ Detalle completo: **[docs/FINANCIAL_RULES.md](docs/FINANCIAL_RULES.md)**.
 npm run test
 ```
 
-Cubren los diez casos que el negocio necesita que salgan bien: gasto con factura,
-gasto sin factura, factura sin movimiento, ingreso sin factura, datáfono que cuadra,
-datáfono que no cuadra, gasto en efectivo, retirada de caja, prevención de duplicados
-e idempotencia — más el recorrido completo desde archivos en disco.
-
-Todos los datos de test son sintéticos.
+60 tests con datos sintéticos: multi-cuenta, documentos justificativos de varios
+tipos, las cuatro cardinalidades de matching, datáfono (cuadra y no cuadra), cash y
+movimientos internos, cola de excepciones, métricas, idempotencia, índice de Drive,
+comparación con cierres manuales y el recorrido completo desde archivos en disco.

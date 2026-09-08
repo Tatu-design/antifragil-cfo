@@ -1,37 +1,33 @@
 /**
- * Construcción del Financial Ledger de un periodo (D19/D20).
+ * Construcción del Financial Ledger de un periodo.
  *
- * Este módulo es el que decide qué es ingreso, qué es gasto, qué es movimiento
- * interno y qué se consolida. Es el punto donde se aplican las reglas
- * financieras que el negocio ya tenía y que aquí quedan escritas y testeadas.
+ * Aquí convergen las tres tesorerías (banco SL, banco SC y caja) en un único
+ * ledger, cada apunte conservando su cuenta de origen, y aquí se aplican las
+ * reglas financieras que el negocio ya tenía.
  *
- * Reglas no negociables implementadas aquí:
+ * Reglas no negociables implementadas en este módulo:
  *   1. Las liquidaciones de datáfono NO entran una a una: se consolidan en una
  *      única línea de ingreso (evita doble contabilización con las ventas).
  *   2. Las ventas cash de clínica proceden de su Excel, no de las retiradas.
  *   3. Retiradas, traspasos y saldos iniciales son movimientos internos.
- *   4. Una factura sin movimiento NO se convierte en gasto.
- *   5. Ningún gasto bancario nuevo se clasifica sin una regla explícita.
+ *   4. Un documento sin movimiento NO se convierte en gasto.
+ *   5. Ningún movimiento se clasifica sin una regla explícita e inequívoca.
  */
 
-import {
-  reconcileCardSettlements,
-  splitCardSettlements,
-} from "./card-settlements";
+import { resolveAccount } from "./accounts";
+import { ACCOUNT_CASH } from "./accounts";
+import { reconcileCardSettlements, splitCardSettlements } from "./card-settlements";
 import { assignOccurrences, findDuplicateSuspects, stableEntryId, stableHash } from "./dedupe";
 import { countByType, createIncident, dedupeIncidents } from "./incidents";
 import { detectInternalMovement } from "./internal";
-import {
-  DEFAULT_MATCH_CONFIG,
-  findInvoicesWithoutMovement,
-  matchEntryToInvoices,
-  reconcileExpensesWithInvoices,
-  type MatchConfig,
-} from "./matching";
+import { DEFAULT_MATCH_CONFIG, type MatchConfig } from "./matching";
 import { formatCents, sumCents } from "./money";
 import { assertValidPeriod, isInPeriod, periodLabel } from "./period";
+import { reconcilePeriod } from "./reconciliation";
 import { classify, EMPTY_RULEBOOK, inheritClassification, type RuleBook } from "./rules";
 import type {
+  AccountSummary,
+  AttachedDocument,
   DocumentRef,
   Incident,
   LedgerEntry,
@@ -40,14 +36,16 @@ import type {
   PeriodLedger,
   PeriodSummary,
   SourceRef,
-  Treasury,
+  SupportingDocument,
+  TreasuryAccount,
+  TreasuryKind,
 } from "./types";
 
 export interface BuildOptions {
   /** Catálogo de reglas de clasificación. Por defecto: ninguna (todo pendiente). */
   ruleBook?: RuleBook;
   matchConfig?: MatchConfig;
-  /** Etiqueta de la línea consolidada de datáfono en el Cash Flow. */
+  /** Etiqueta de la línea consolidada de datáfono. */
   clinicBankIncomeLabel?: string;
   /** Etiqueta de la línea consolidada de ventas en efectivo. */
   clinicCashIncomeLabel?: string;
@@ -60,6 +58,7 @@ const DEFAULTS = {
 
 export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}): PeriodLedger {
   const period = assertValidPeriod(input.period);
+  const accounts = input.accounts;
   const ruleBook = options.ruleBook ?? EMPTY_RULEBOOK;
   const matchConfig = options.matchConfig ?? DEFAULT_MATCH_CONFIG;
   const clinicBankLabel = options.clinicBankIncomeLabel ?? DEFAULTS.clinicBankIncomeLabel;
@@ -70,8 +69,8 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
 
   // ── 0 · Higiene de fuentes ────────────────────────────────────────────────
   // Lo que cae fuera del periodo no se procesa en silencio: se reporta.
-  const bankInPeriod = filterByPeriod(input.bankMovements, period, "bank_statement", incidents);
-  const cashInPeriod = filterByPeriod(input.cashMovements, period, "cash_account", incidents);
+  const bankInPeriod = filterByPeriod(input.bankMovements, period, incidents);
+  const cashInPeriod = filterByPeriod(input.cashMovements, period, incidents);
 
   // ── 1 · Datáfono de clínica (consolidado, nunca movimiento a movimiento) ──
   const { settlements, others: ordinaryBank } = splitCardSettlements(bankInPeriod);
@@ -83,15 +82,14 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
   if (settlements.length > 0) {
     const salesDocument = documentFromSource(input.clinicBankSales[0]?.source);
     const aggregatedIds = settlements.map((m) =>
-      stableHash(["bank_statement", period, m.date, m.amountCents, m.concept]),
+      stableHash(["bank_statement", period, m.accountId, m.date, m.amountCents, m.concept]),
     );
     const notes = [
       `Consolida ${settlements.length} liquidación(es) de remesas de comercio del extracto.`,
-      "Las facturas individuales de venta NO generan ingresos adicionales: son el mismo ingreso.",
+      "Las ventas individuales del Excel NO generan ingresos adicionales: son el mismo ingreso.",
     ];
 
     if (input.clinicBankSales.length === 0) {
-      // Falta la fuente de contraste: es un problema de fuentes, no un descuadre.
       incidents.push(
         createIncident({
           type: "SOURCE_ERROR",
@@ -128,26 +126,42 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
 
     // Se reconoce el importe efectivamente cobrado en banco. Si difiere de la
     // facturación, la diferencia queda como incidencia, nunca como ajuste.
-    const totalCents = sumCents(settlements.map((m) => m.amountCents));
+    const settlementAccount = settlements[0]?.accountId ?? accounts[0]?.id ?? "sl_bank";
     entries.push(
       makeEntry({
         kind: "bank_statement",
         period,
+        accounts,
+        accountId: settlementAccount,
         date: lastDateOf(settlements) ?? `${period}-01`,
         direction: "income",
-        treasury: "bank",
-        amountCents: totalCents,
+        amountCents: sumCents(settlements.map((m) => m.amountCents)),
         description: clinicBankLabel,
         rawDescription: "LIQUIDACIÓN DE REMESAS DE COMERCIO (consolidado del mes)",
         counterparty: "Clínica Antifrágil (datáfono)",
         category: null,
         pnl: null,
         classificationStatus: "pending",
-        reconciliation: cardSettlement?.reconciled ? "matched" : "unmatched",
-        documents: salesDocument ? [salesDocument] : [],
+        reconciliation: "reconciled",
+        documents: salesDocument
+          ? [
+              {
+                ref: salesDocument,
+                method: "aggregate_period",
+                score: cardSettlement?.reconciled ? 1 : 0.5,
+                reasons: [
+                  "conciliación agregada mensual del datáfono",
+                  cardSettlement?.reconciled
+                    ? "banco y facturación cuadran"
+                    : "banco y facturación NO cuadran: ver incidencia",
+                ],
+              },
+            ]
+          : [],
         source: {
           kind: "bank_statement",
           file: settlements[0]?.source.file ?? "extracto bancario",
+          accountId: settlementAccount,
           raw: `${settlements.length} movimientos consolidados`,
         },
         reviewStatus: cardSettlement?.reconciled ? "imported" : "needs_review",
@@ -170,9 +184,9 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
     );
   }
 
-  // ── 2 · Resto de movimientos bancarios ────────────────────────────────────
+  // ── 2 · Resto de movimientos bancarios (todas las cuentas) ────────────────
   const bankWithOccurrence = assignOccurrences(ordinaryBank, (m) =>
-    stableHash([m.date, m.amountCents, m.concept]),
+    stableHash([m.accountId, m.date, m.amountCents, m.concept]),
   );
 
   for (const { item: movement, occurrence } of bankWithOccurrence) {
@@ -183,17 +197,18 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
         makeEntry({
           kind: "bank_statement",
           period,
+          accounts,
+          accountId: movement.accountId,
           date: movement.date,
           valueDate: movement.valueDate,
           direction: "internal",
-          treasury: "bank",
           amountCents: movement.amountCents,
           description: movement.concept,
           rawDescription: movement.concept,
           category: null,
           pnl: null,
           classificationStatus: "not_applicable",
-          reconciliation: "not_applicable",
+          reconciliation: "pending",
           documents: [],
           source: movement.source,
           reviewStatus: "imported",
@@ -204,8 +219,7 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
       continue;
     }
 
-    const isExpense = movement.amountCents < 0;
-    const direction = isExpense ? "expense" : "income";
+    const direction = movement.amountCents < 0 ? "expense" : "income";
     const classification = classify(movement.concept, {
       ruleBook,
       treasury: "bank",
@@ -216,20 +230,21 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
       makeEntry({
         kind: "bank_statement",
         period,
+        accounts,
+        accountId: movement.accountId,
         date: movement.date,
         valueDate: movement.valueDate,
         direction,
-        treasury: "bank",
         amountCents: movement.amountCents,
         description: movement.concept,
         rawDescription: movement.observations
           ? `${movement.concept} | ${movement.observations}`
           : movement.concept,
-        counterparty: null,
         category: classification.category,
         pnl: classification.pnl,
         classificationStatus: classification.status,
-        reconciliation: "unmatched",
+        classificationRuleId: classification.ruleId ?? null,
+        reconciliation: "pending",
         documents: [],
         source: movement.source,
         reviewStatus: classification.status === "pending" ? "needs_review" : "imported",
@@ -241,7 +256,7 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
 
   // ── 3 · Cuenta de cash ────────────────────────────────────────────────────
   const cashWithOccurrence = assignOccurrences(cashInPeriod, (m) =>
-    stableHash([m.date, m.amountCents, m.concept]),
+    stableHash([m.accountId, m.date, m.amountCents, m.concept]),
   );
 
   for (const { item: movement, occurrence } of cashWithOccurrence) {
@@ -250,8 +265,7 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
 
     // Un cobro en efectivo anotado en la cuenta de cash es, casi siempre, el
     // reflejo de ventas que ya se reconocen desde su propio Excel. Reconocerlo
-    // aquí sería doble contabilización, así que se registra como interno y se
-    // deja constancia para revisión humana.
+    // aquí sería doble contabilización: se registra como interno y se avisa.
     if (internal.isInternal || isIncomeSigned) {
       const reason = internal.isInternal
         ? (internal.reason ?? "Movimiento interno de tesorería.")
@@ -260,16 +274,17 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
       const entry = makeEntry({
         kind: "cash_account",
         period,
+        accounts,
+        accountId: movement.accountId,
         date: movement.date,
         direction: "internal",
-        treasury: "cash",
         amountCents: movement.amountCents,
         description: movement.concept,
         rawDescription: movement.concept,
         category: null,
         pnl: null,
         classificationStatus: "not_applicable",
-        reconciliation: "not_applicable",
+        reconciliation: "pending",
         documents: [],
         source: movement.source,
         reviewStatus: internal.isInternal ? "imported" : "needs_review",
@@ -304,16 +319,17 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
       makeEntry({
         kind: "cash_account",
         period,
+        accounts,
+        accountId: movement.accountId,
         date: movement.date,
         direction: "expense",
-        treasury: "cash",
         amountCents: movement.amountCents,
         description: movement.concept,
         rawDescription: movement.concept,
         category: classification.category,
         pnl: classification.pnl,
         classificationStatus: classification.status,
-        reconciliation: "unmatched",
+        reconciliation: "pending",
         documents: [],
         source: movement.source,
         reviewStatus: classification.status === "pending" ? "needs_review" : "imported",
@@ -325,27 +341,37 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
 
   // ── 4 · Ventas de clínica cobradas en efectivo ────────────────────────────
   if (input.clinicCashSales.length > 0) {
-    const totalCents = sumCents(input.clinicCashSales.map((s) => Math.abs(s.amountCents)));
     const document = documentFromSource(input.clinicCashSales[0]?.source);
     entries.push(
       makeEntry({
         kind: "clinic_cash_sales",
         period,
+        accounts,
+        accountId: ACCOUNT_CASH,
         date: lastDateOf(input.clinicCashSales) ?? `${period}-01`,
         direction: "income",
-        treasury: "cash",
-        amountCents: totalCents,
+        amountCents: sumCents(input.clinicCashSales.map((s) => Math.abs(s.amountCents))),
         description: clinicCashLabel,
         rawDescription: `Ventas de clínica cobradas en efectivo (${input.clinicCashSales.length} líneas)`,
         counterparty: "Clínica Antifrágil (efectivo)",
         category: null,
         pnl: null,
         classificationStatus: "pending",
-        reconciliation: "matched",
-        documents: document ? [document] : [],
+        reconciliation: "reconciled",
+        documents: document
+          ? [
+              {
+                ref: document,
+                method: "aggregate_period",
+                score: 1,
+                reasons: ["consolidado del Excel de ventas en efectivo del mes"],
+              },
+            ]
+          : [],
         source: {
           kind: "clinic_cash_sales",
           file: input.clinicCashSales[0]?.source.file ?? "ventas clínica cash",
+          accountId: ACCOUNT_CASH,
           raw: `${input.clinicCashSales.length} líneas consolidadas`,
         },
         reviewStatus: "imported",
@@ -358,27 +384,32 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
     );
   }
 
-  // ── 5 · Conciliación de gastos contra facturas ────────────────────────────
-  const reconciled = reconcileExpensesWithInvoices(entries, input.invoices, matchConfig);
+  // ── 5 · Conciliación documental ───────────────────────────────────────────
+  const reconciled = reconcilePeriod(entries, input.documents, matchConfig);
   const finalEntries = reconciled.entries;
 
   for (const entry of finalEntries) {
-    if (entry.direction !== "expense") continue;
-    if (entry.reconciliation === "missing_document") {
-      incidents.push(
-        createIncident({
-          type: "EXPENSE_WITHOUT_INVOICE",
-          // Un gasto cash suele justificarse con el propio documento de caja:
-          // se informa, pero no se trata con la misma gravedad que en banco.
-          severity: entry.treasury === "cash" ? "info" : "warning",
-          period,
-          message: `Gasto sin factura localizada: "${entry.description}" (${formatCents(entry.amountCents)}).`,
-          entryIds: [entry.id],
-          details: { importe: entry.amountCents, fecha: entry.date, tesoreria: entry.treasury },
-          source: entry.source,
-        }),
-      );
-    }
+    if (entry.reconciliation !== "missing_document") continue;
+    const isIncome = entry.direction === "income";
+    incidents.push(
+      createIncident({
+        type: isIncome ? "INCOME_WITHOUT_DOCUMENT" : "MOVEMENT_WITHOUT_DOCUMENT",
+        // Un gasto en efectivo suele justificarse con el propio documento de
+        // caja: se informa, pero no con la gravedad de un movimiento bancario.
+        severity: entry.treasury === "cash" && !isIncome ? "info" : "warning",
+        period,
+        message: `${isIncome ? "Ingreso" : "Movimiento"} sin documento justificativo: "${
+          entry.description
+        }" (${formatCents(entry.amountCents)}) en ${accountLabel(accounts, entry.accountId)}.`,
+        entryIds: [entry.id],
+        details: {
+          importe: entry.amountCents,
+          fecha: entry.date,
+          cuenta: entry.accountId,
+        },
+        source: entry.source,
+      }),
+    );
   }
 
   for (const { entry, candidates } of reconciled.ambiguous) {
@@ -386,12 +417,14 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
       createIncident({
         type: "AMBIGUOUS_MATCH",
         period,
-        message: `Varias facturas encajan con "${entry.description}" (${formatCents(entry.amountCents)}). No se ha asociado ninguna.`,
+        message: `Varios documentos encajan con "${entry.description}" (${formatCents(
+          entry.amountCents,
+        )}). No se ha asociado ninguno.`,
         entryIds: [entry.id],
         details: {
           candidatos: candidates.map((c) => ({
-            factura: c.invoice.document.name,
-            proveedor: c.invoice.supplier,
+            documento: c.document.document.name,
+            emisor: c.document.issuer,
             score: Number(c.score.toFixed(3)),
           })),
         },
@@ -400,52 +433,42 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
     );
   }
 
-  // ── 6 · Facturas sin movimiento (nunca se convierten en gasto) ────────────
-  for (const invoice of findInvoicesWithoutMovement(
-    reconciled.unmatchedInvoices,
-    finalEntries,
-    matchConfig,
-  )) {
+  // ── 6 · Documentos sin movimiento (nunca se convierten en gasto) ──────────
+  for (const document of reconciled.unmatchedDocuments) {
     incidents.push(
       createIncident({
-        type: "INVOICE_WITHOUT_MOVEMENT",
+        type: "DOCUMENT_WITHOUT_MOVEMENT",
         period,
-        message: `Factura sin movimiento localizado: ${invoice.supplier} ${formatCents(
-          invoice.amountCents,
-        )} (${invoice.date}). No se ha creado ningún gasto.`,
+        message: `Documento sin movimiento localizado: ${document.issuer} ${
+          document.amountCents === null ? "(importe no extraído)" : formatCents(document.amountCents)
+        } (${document.date}). No se ha creado ningún movimiento.`,
         details: {
-          proveedor: invoice.supplier,
-          importe: invoice.amountCents,
-          documento: invoice.document.name,
-          numeroFactura: invoice.invoiceNumber ?? null,
+          emisor: document.issuer,
+          tipo: document.docType,
+          importe: document.amountCents,
+          documento: document.document.name,
+          referencia: document.reference ?? null,
         },
-        source: invoice.source,
-        key: invoice.id,
+        source: document.source,
+        key: document.id,
       }),
     );
   }
 
-  // ── 7 · Ingresos bancarios sin documentación ──────────────────────────────
-  const incomeEntries = finalEntries.filter(
-    (e) => e.direction === "income" && e.source.kind === "bank_statement" && !e.aggregates,
+  // ── 7 · Movimientos sin clasificar ────────────────────────────────────────
+  const unclassified = finalEntries.filter(
+    (e) => e.direction !== "internal" && e.classificationStatus === "pending",
   );
-  for (const entry of incomeEntries) {
-    const outcome = matchEntryToInvoices(entry, input.incomeDocuments, matchConfig);
-    if (outcome.status === "matched") {
-      entry.reconciliation = "matched";
-      entry.documents = [...entry.documents, outcome.candidate.invoice.document];
-      continue;
-    }
-    entry.reconciliation = outcome.status === "ambiguous" ? "ambiguous" : "missing_document";
-    entry.reviewStatus = "needs_review";
+  if (unclassified.length > 0) {
     incidents.push(
       createIncident({
-        type: "INCOME_WITHOUT_INVOICE",
+        type: "UNCLASSIFIED_MOVEMENT",
+        severity: "info",
         period,
-        message: `Ingreso bancario sin factura localizada: "${entry.description}" (${formatCents(entry.amountCents)}).`,
-        entryIds: [entry.id],
-        details: { importe: entry.amountCents, fecha: entry.date },
-        source: entry.source,
+        message: `${unclassified.length} movimiento(s) pendientes de clasificar (categoría y P&L).`,
+        entryIds: unclassified.map((e) => e.id),
+        details: { importeTotal: sumCents(unclassified.map((e) => Math.abs(e.amountCents))) },
+        key: "unclassified",
       }),
     );
   }
@@ -465,12 +488,16 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
     );
   }
 
+  const finalIncidents = dedupeIncidents(incidents);
+
   return {
     period,
+    accounts,
     entries: finalEntries,
-    incidents: dedupeIncidents(incidents),
+    incidents: finalIncidents,
     cardSettlement,
-    summary: summarize(finalEntries, dedupeIncidents(incidents)),
+    unmatchedDocuments: reconciled.unmatchedDocuments,
+    summary: summarize(finalEntries, finalIncidents, accounts),
   };
 }
 
@@ -479,10 +506,11 @@ export function buildPeriodLedger(input: PeriodInput, options: BuildOptions = {}
 interface MakeEntryInput {
   kind: SourceRef["kind"];
   period: Period;
+  accounts: TreasuryAccount[];
+  accountId: string;
   date: string;
   valueDate?: string | null;
   direction: LedgerEntry["direction"];
-  treasury: Treasury;
   amountCents: number;
   description: string;
   rawDescription: string;
@@ -490,8 +518,9 @@ interface MakeEntryInput {
   category: string | null;
   pnl: string | null;
   classificationStatus: LedgerEntry["classificationStatus"];
+  classificationRuleId?: string | null;
   reconciliation: LedgerEntry["reconciliation"];
-  documents: DocumentRef[];
+  documents: AttachedDocument[];
   source: SourceRef;
   reviewStatus: LedgerEntry["reviewStatus"];
   occurrence: number;
@@ -500,10 +529,12 @@ interface MakeEntryInput {
 }
 
 function makeEntry(input: MakeEntryInput): LedgerEntry {
+  const account = resolveAccount(input.accounts, input.accountId);
   return {
     id: stableEntryId({
       kind: input.kind,
       period: input.period,
+      accountId: input.accountId,
       date: input.date,
       amountCents: input.amountCents,
       description: input.description,
@@ -513,7 +544,8 @@ function makeEntry(input: MakeEntryInput): LedgerEntry {
     date: input.date,
     valueDate: input.valueDate ?? null,
     direction: input.direction,
-    treasury: input.treasury,
+    accountId: account.id,
+    treasury: account.kind,
     amountCents: input.amountCents,
     description: input.description,
     rawDescription: input.rawDescription,
@@ -521,7 +553,9 @@ function makeEntry(input: MakeEntryInput): LedgerEntry {
     category: input.category,
     pnl: input.pnl,
     classificationStatus: input.classificationStatus,
+    classificationRuleId: input.classificationRuleId ?? null,
     reconciliation: input.reconciliation,
+    reconciliationReason: null,
     documents: input.documents,
     source: input.source,
     reviewStatus: input.reviewStatus,
@@ -533,7 +567,6 @@ function makeEntry(input: MakeEntryInput): LedgerEntry {
 function filterByPeriod<T extends { date: string; source: SourceRef }>(
   items: T[],
   period: Period,
-  kind: SourceRef["kind"],
   incidents: Incident[],
 ): T[] {
   const inside: T[] = [];
@@ -549,7 +582,7 @@ function filterByPeriod<T extends { date: string; source: SourceRef }>(
         period,
         message: `Movimiento con fecha ${item.date}, fuera del periodo ${period}. No se ha incorporado.`,
         source: item.source,
-        key: `${kind}:${item.date}:${item.source.row ?? ""}`,
+        key: `${item.source.kind}:${item.source.accountId ?? ""}:${item.date}:${item.source.row ?? ""}`,
       }),
     );
   }
@@ -560,6 +593,7 @@ function documentFromSource(source: SourceRef | undefined): DocumentRef | null {
   if (!source?.file) return null;
   return {
     name: source.file,
+    docType: "sales_sheet",
     driveFileId: null,
     url: null,
     localPath: source.file,
@@ -571,7 +605,21 @@ function lastDateOf(items: Array<{ date: string }>): string | null {
   return dates.length > 0 ? dates[dates.length - 1] : null;
 }
 
-function summarize(entries: LedgerEntry[], incidents: Incident[]): PeriodSummary {
+function accountLabel(accounts: TreasuryAccount[], accountId: string): string {
+  return resolveAccount(accounts, accountId).label;
+}
+
+/**
+ * Métricas del periodo, deliberadamente limitadas al MVP.
+ *
+ * Cash Flow operativo, EBITDA y balances quedan fuera a propósito: primero hay
+ * que demostrar que los movimientos y su documentación son correctos.
+ */
+function summarize(
+  entries: LedgerEntry[],
+  incidents: Incident[],
+  accounts: TreasuryAccount[],
+): PeriodSummary {
   const economic = entries.filter((e) => e.direction !== "internal");
   const incomeCents = sumCents(
     economic.filter((e) => e.direction === "income").map((e) => Math.abs(e.amountCents)),
@@ -580,42 +628,74 @@ function summarize(entries: LedgerEntry[], incidents: Incident[]): PeriodSummary
     economic.filter((e) => e.direction === "expense").map((e) => Math.abs(e.amountCents)),
   );
 
-  const byTreasury: PeriodSummary["byTreasury"] = {
-    bank: { incomeCents: 0, expenseCents: 0 },
-    cash: { incomeCents: 0, expenseCents: 0 },
+  const byAccount: Record<string, AccountSummary> = {};
+  const ensureAccount = (accountId: string): AccountSummary => {
+    if (!byAccount[accountId]) {
+      const account = resolveAccount(accounts, accountId);
+      byAccount[accountId] = {
+        accountId,
+        label: account.label,
+        kind: account.kind as TreasuryKind,
+        legalEntity: account.legalEntity,
+        incomeCents: 0,
+        expenseCents: 0,
+        netCents: 0,
+        movementCount: 0,
+      };
+    }
+    return byAccount[accountId];
   };
+  for (const account of accounts) ensureAccount(account.id);
+
   const byCategory: Record<string, number> = {};
   const byPnl: Record<string, number> = {};
-  let withInvoiceCents = 0;
-  let withoutInvoiceCents = 0;
 
-  for (const entry of economic) {
+  for (const entry of entries) {
+    const summary = ensureAccount(entry.accountId);
+    summary.movementCount += 1;
+    if (entry.direction === "internal") continue;
+
     const magnitude = Math.abs(entry.amountCents);
-    if (entry.direction === "income") byTreasury[entry.treasury].incomeCents += magnitude;
-    else byTreasury[entry.treasury].expenseCents += magnitude;
+    if (entry.direction === "income") summary.incomeCents += magnitude;
+    else summary.expenseCents += magnitude;
+    summary.netCents = summary.incomeCents - summary.expenseCents;
 
     if (entry.direction === "expense") {
       const category = entry.category ?? "PENDIENTE";
       const pnl = entry.pnl ?? "PENDIENTE";
       byCategory[category] = (byCategory[category] ?? 0) + magnitude;
       byPnl[pnl] = (byPnl[pnl] ?? 0) + magnitude;
-      if (entry.documents.length > 0) withInvoiceCents += magnitude;
-      else withoutInvoiceCents += magnitude;
     }
   }
+
+  // Un movimiento cuenta como conciliado si tiene documento o si, por su
+  // naturaleza, no lo necesita. Los internos entran en el cálculo: también
+  // forman parte de "todo lo que hay que dejar resuelto".
+  const settled = entries.filter(
+    (e) => e.reconciliation === "reconciled" || e.reconciliation === "not_document_required",
+  ).length;
+  const reconciledPct = entries.length === 0 ? 0 : Math.round((settled / entries.length) * 1000) / 10;
+
+  const unjustified = entries.filter(
+    (e) => e.reconciliation === "missing_document" || e.reconciliation === "ambiguous",
+  );
 
   return {
     incomeCents,
     expenseCents,
     netCents: incomeCents - expenseCents,
-    internalMovementCount: entries.filter((e) => e.direction === "internal").length,
     entryCount: entries.length,
+    internalMovementCount: entries.filter((e) => e.direction === "internal").length,
+    byAccount,
+    reconciledPct,
+    pendingReviewCount: entries.filter((e) => e.reviewStatus === "needs_review").length,
     pendingClassificationCount: economic.filter((e) => e.classificationStatus === "pending").length,
-    incidentCountByType: countByType(incidents),
-    byTreasury,
+    unjustifiedAmountCents: sumCents(unjustified.map((e) => Math.abs(e.amountCents))),
     byCategory,
     byPnl,
-    withInvoiceCents,
-    withoutInvoiceCents,
+    incidentCountByType: countByType(incidents),
   };
 }
+
+/** Documentos indexados que el motor no ha podido casar, para los informes. */
+export type UnmatchedDocuments = SupportingDocument[];

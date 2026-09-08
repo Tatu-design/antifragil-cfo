@@ -1,8 +1,8 @@
 # Modelo de datos
 
-El núcleo es el **Financial Ledger**: una única tabla de apuntes que representa la
-realidad económica del negocio. Todo lo demás (documentos, incidencias, reglas,
-importaciones) cuelga de ahí. El Cash Flow no es una tabla: es una vista calculada.
+El núcleo es el **Financial Ledger**: una tabla de movimientos que representa la
+realidad económica de las tres tesorerías. Todo lo demás (documentos, conciliación,
+incidencias, reglas) cuelga de ahí.
 
 Esquema SQL: [supabase/migrations/0001_financial_ledger.sql](../supabase/migrations/0001_financial_ledger.sql)
 Tipos TypeScript: [lib/finance/types.ts](../lib/finance/types.ts)
@@ -12,118 +12,159 @@ Tipos TypeScript: [lib/finance/types.ts](../lib/finance/types.ts)
 ## Mapa
 
 ```text
+treasury_accounts (sl_bank · sc_bank · cash)
+        │
 periods (YYYY-MM)
    │
-   ├── imports ............. cada lectura de fuentes, con hash del archivo
+   ├── imports ............... cada lectura de fuentes, con hash del archivo
    │
-   ├── ledger_entries ⭐ .... los apuntes
+   ├── ledger_entries ⭐ ...... los movimientos, cada uno con su cuenta
    │      │
-   │      └── entry_documents ──► documents (metadatos de Drive/local)
+   │      └── entry_documents ──► documents (índice de Drive)
+   │             (evidencia: método, score, motivos, grupo)
    │
-   ├── incidents ........... lo que el motor no puede decidir solo
-   │
-   ├── card_settlements .... conciliación agregada del datáfono (1 fila/mes)
-   │
-   └── audit_events ........ quién cambió qué y cuándo
+   ├── incidents ............. lo que el motor no puede decidir solo
+   ├── card_settlements ...... conciliación agregada del datáfono (1 fila/mes)
+   ├── close_comparisons ..... diferencias motor vs cierre manual
+   └── audit_events .......... quién cambió qué y cuándo
 
-classification_rules ....... reglas deterministas de categoría y P&L
-cfo_members ................ lista blanca de acceso (base de todo el RLS)
+drive_syncs .................. registro de cada sincronización con Drive
+classification_rules ......... reglas deterministas de categoría y P&L
+cfo_members .................. lista blanca de acceso (base de todo el RLS)
 ```
+
+---
+
+## `treasury_accounts`
+
+Tres filas sembradas por la migración:
+
+| id | label | kind | legal_entity |
+|----|-------|------|--------------|
+| `sl_bank` | Banco SL | bank | SL |
+| `sc_bank` | Banco SC | bank | SC |
+| `cash` | Caja Antifrágil | cash | SL |
+
+Los ids son estables porque forman parte del identificador de cada movimiento y del
+nombre de las carpetas de entrada. Cambiar un id cambia todos los ids del histórico.
 
 ---
 
 ## `ledger_entries` — la tabla central
 
-| Campo | Tipo | Notas |
-|-------|------|-------|
-| `id` | text (PK) | **Hash determinista**, no UUID. Es lo que hace posible la idempotencia |
-| `period` | text | `YYYY-MM`, con restricción de formato |
-| `entry_date` / `value_date` | date | Fecha contable y fecha valor |
-| `direction` | text | `income` · `expense` · `internal` |
-| `treasury` | text | `bank` · `cash` |
-| `amount_cents` | bigint | Céntimos con signo real. Nunca decimal flotante |
-| `description` | text | Concepto legible |
-| `raw_description` | text | Concepto original íntegro, sin tocar |
-| `counterparty` | text | Contraparte estimada |
-| `category` / `pnl` | text | `null` = pendiente de decisión humana |
-| `classification_status` | text | `pending` · `rule` · `manual` · `not_applicable` |
-| `classification_rule_id` | text | Qué regla lo clasificó, si fue una regla |
-| `reconciliation` | text | `matched` · `missing_document` · `ambiguous` · `unmatched` · `not_applicable` |
-| `review_status` | text | `imported` · `needs_review` · `reviewed` · `approved` |
-| `source_kind/file/sheet/row/raw` | — | **Trazabilidad exacta**: archivo, hoja, fila y texto original |
-| `aggregates` | text[] | Ids de los movimientos consolidados (caso datáfono) |
-| `notes` | text[] | Explicaciones del motor para quien revisa |
-| `import_id` | uuid | Ejecución que lo introdujo |
+| Campo | Notas |
+|-------|-------|
+| `id` (PK, text) | **Hash determinista**, no UUID. Base de la idempotencia |
+| `period` | `YYYY-MM`, con restricción de formato |
+| `account_id` | FK a `treasury_accounts`. **Siempre presente** |
+| `treasury` | `bank` / `cash`, para agregaciones rápidas |
+| `entry_date` / `value_date` | Fecha contable y fecha valor |
+| `direction` | `income` · `expense` · `internal` |
+| `amount_cents` | Céntimos con signo real. Nunca decimal flotante |
+| `description` / `raw_description` | Concepto legible y concepto original íntegro |
+| `category` / `pnl` | `null` = pendiente de decisión humana |
+| `classification_status` | `pending` · `rule` · `manual` · `not_applicable` |
+| `classification_rule_id` | Qué regla lo clasificó, si fue una regla |
+| `reconciliation` | `pending` · `reconciled` · `missing_document` · `ambiguous` · `not_document_required` |
+| `reconciliation_reason` | Por qué no requiere documento. **Obligatorio en ese estado** |
+| `review_status` | `imported` · `needs_review` · `reviewed` · `approved` |
+| `source_*` | Archivo, hoja, fila y texto original: trazabilidad exacta |
+| `aggregates` | Ids de los movimientos consolidados (datáfono) |
+| `notes` | Explicaciones del motor para quien revisa |
 
 ### Reglas escritas en la base de datos
 
-No basta con que el código se porte bien; PostgreSQL también lo impide:
-
 ```sql
--- Un movimiento interno no puede llevar clasificación de P&L (D36/D37)
+-- Un movimiento interno no puede llevar clasificación de P&L
 constraint ledger_internal_has_no_pnl
   check (direction <> 'internal' or (category is null and pnl is null))
+
+-- Si no requiere documento, hay que decir por qué
+constraint ledger_not_required_has_reason
+  check (reconciliation <> 'not_document_required' or reconciliation_reason is not null)
 ```
 
-Más las restricciones de dominio de `direction`, `treasury`, `classification_status`,
-`reconciliation` y `review_status`, y el formato de `period`.
-
----
-
-## Por qué el id es un hash y no un UUID
-
-Un UUID nuevo en cada ejecución convierte cualquier reprocesado en una duplicación.
-El id se calcula así:
+### Por qué el id es un hash
 
 ```text
-sha256( source_kind | period | fecha | importe_cents | concepto_normalizado | ordinal )
+sha256( source_kind | period | account_id | fecha | importe | concepto_normalizado | ordinal )
 ```
 
-- **Mismo archivo, misma ejecución dos veces** → mismos ids → el upsert no duplica nada.
-- **Dos cargos reales idénticos el mismo día** → el ordinal (0, 1, 2…) los distingue de forma estable, y ambos existen.
-
-El ordinal se asigna por orden de aparición en la fuente, que para un mismo archivo
-es siempre el mismo. Ver [lib/finance/dedupe.ts](../lib/finance/dedupe.ts).
+- **Mismo archivo procesado dos veces** → mismos ids → el upsert no duplica nada.
+- **Mismo importe el mismo día en la SL y en la SC** → ids distintos: son movimientos distintos.
+- **Dos cargos reales idénticos el mismo día en la misma cuenta** → el ordinal los distingue de forma estable, y ambos existen.
 
 ---
 
-## `documents` y `entry_documents`
+## `documents` — índice documental de Drive
 
-Drive sigue siendo el repositorio documental (D21). Aquí viven **metadatos y enlaces**,
-no copias de los archivos (D22):
+Drive guarda los archivos; aquí viven **metadatos y enlaces**, no copias.
 
-- `drive_file_id` (único), `url`, `local_path`
-- `supplier`, `invoice_number`, `doc_date`, `amount_cents`
+| Campo | Notas |
+|-------|-------|
+| `drive_file_id` (único) | Clave natural del sync: Drive la garantiza estable |
+| `doc_type` | `invoice` · `payroll` · `tax` · `social_security` · `receipt` · `sales_sheet` · `bank_statement` · `contract` · `other` |
+| `folder_path` | Ruta dentro de la raíz financiera |
+| `issuer` · `reference` · `doc_date` · `amount_cents` | Deducidos cuando se puede; `null` si no |
+| `inferred_from` | Señales usadas para deducirlos. Auditoría del indexado |
+| `synced_at` · `modified_time` · `size_bytes` | Control de sincronización |
 
-La relación con los apuntes es N:M, y guarda **cómo se estableció**: `match_reason`
-y `match_score`. Así un match automático se puede auditar meses después.
+`drive_syncs` registra cada sincronización: periodo, carpeta raíz, nº de documentos
+y carpetas, problemas y quién la lanzó.
 
-> Si no se conoce la URL de Drive, el campo queda `null`. Nunca se inventa un enlace.
+> Si no se conoce la URL o el importe, el campo queda `null`. Nunca se inventa.
+
+---
+
+## `entry_documents` — la conciliación, con su evidencia
+
+Relación N:M, porque las cuatro cardinalidades son reales:
+
+| Campo | Para qué |
+|-------|----------|
+| `match_method` | `amount_date_issuer` · `reference_in_concept` · `aggregate_sum` · `aggregate_period` · `manual` |
+| `match_score` | Confianza 0–1 (`null` si es manual) |
+| `match_reasons` | "importe exacto", "3 días de diferencia", "emisor ~0.92" |
+| `group_id` | Agrupa los movimientos o documentos de una misma conciliación |
+
+Un documento pertenece a un único grupo: así una misma factura no justifica dos pagos.
 
 ---
 
 ## `incidents`
 
-Ids también deterministas: reprocesar el mes no genera incidencias duplicadas.
-Ciclo de vida: `open` → `in_review` → `resolved` / `accepted`, con `resolved_by`,
-`resolved_at` y `resolution` para dejar constancia de la decisión.
+Ids deterministas: reprocesar no genera incidencias duplicadas. Ciclo de vida
+`open` → `in_review` → `resolved` / `accepted`, con `resolved_by`, `resolved_at` y
+`resolution`.
 
-Los ocho tipos están en [FINANCIAL_RULES.md](./FINANCIAL_RULES.md#12-catálogo-de-incidencias).
+Los nueve tipos están en [FINANCIAL_RULES.md](./FINANCIAL_RULES.md#15-catálogo-de-incidencias).
 
 ---
 
 ## `classification_rules`
 
 ```text
-id · contains[] · excludes[] · treasury · applies_to · category · pnl
-confidence · enabled · note (obligatoria) · created_by
+id · contains[] · excludes[] · account_id · applies_to · category · pnl
+confidence · enabled · note (obligatoria) · learned_from_entry_id · created_by
 ```
 
-Una regla sin `note` no es auditable, así que la columna es `NOT NULL`.
-Una corrección manual repetida puede convertirse en regla (D30), y esa regla
-explica por sí misma por qué existe.
+`learned_from_entry_id` guarda de qué movimiento nació la regla, para el flujo
+*"guardar esta decisión para futuros movimientos similares"*. Una regla sin `note`
+no es auditable, así que la columna es `NOT NULL`.
 
 **La tabla arranca vacía**: hasta validar la taxonomía histórica, todo queda pendiente.
+
+---
+
+## `close_comparisons`
+
+Diferencias entre el mes reconstruido y el cierre manual:
+
+- `kind`: `only_in_engine` · `only_in_manual` · `amount_mismatch`
+- `verdict`: **`pending`** (por defecto) · `probable_engine_error` · `probable_manual_error` · `criteria_difference`
+- `evidence[]`, `resolution_note`, `resolved_by`
+
+El veredicto lo pone una persona. El motor nunca se autoproclama correcto.
 
 ---
 
@@ -135,16 +176,13 @@ explica por sí misma por qué existe.
 | Resto de tablas de datos | Cualquier miembro | Solo `owner` / `editor` |
 | `audit_events` | Cualquier miembro | Solo servidor |
 
-**No hay políticas de DELETE en ninguna tabla.** Los datos financieros no se borran
-desde la aplicación: corregir es escribir un cambio, no hacer desaparecer el rastro.
-
-Las funciones `is_cfo_member()` y `can_edit_cfo()` son `SECURITY DEFINER` para poder
-consultar la lista de miembros sin recursión de políticas.
+**No hay políticas de DELETE en ninguna tabla.** Corregir es escribir un cambio, no
+hacer desaparecer el rastro.
 
 ---
 
 ## Lo que todavía no está
 
-- Tabla de contrapartes normalizadas (proveedores). Se creará cuando el histórico diga cuántas hay y cómo se agrupan.
-- Categorías y P&L como tablas propias: hoy son texto. Se normalizarán al migrar la taxonomía histórica (Fase 2), no antes.
-- Balances: fuera del MVP por decisión explícita (D41).
+- Contrapartes normalizadas (proveedores) como tabla propia: se creará cuando el histórico diga cuántas hay.
+- Categorías y P&L como tablas: hoy son texto; se normalizarán al migrar la taxonomía histórica.
+- Cash Flow operativo, EBITDA y balances: fuera del MVP por decisión explícita (D69).

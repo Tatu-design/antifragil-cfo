@@ -1,68 +1,64 @@
+import Link from "next/link";
+import { listAnalyzedPeriods } from "@/lib/period-store";
+import { periodLabel } from "@/lib/finance/period";
+
 /**
- * Página de estado del proyecto.
+ * Portada: elegir periodo.
  *
- * La interfaz operativa (dashboard mensual, incidencias, Cash Flow) llega
- * cuando el motor financiero esté validado con agosto 2026. Hasta entonces esta
- * página solo dice en qué punto está el sistema. No muestra ningún dato
- * financiero.
+ * Los periodos disponibles son los ya analizados con `npm run cfo -- analyze`.
+ * No se muestra ninguna cifra aquí: solo el acceso a cada mes.
  */
+// Lee la carpeta local de trabajo en cada visita: si se prerenderizara, la
+// lista de periodos se congelaría con lo que hubiera en el momento del build.
+export const dynamic = "force-dynamic";
 
-const phases = [
-  { name: "Motor financiero (reglas, conciliación, incidencias)", done: true },
-  { name: "Lectura de fuentes locales e informes de auditoría", done: true },
-  { name: "Esquema Supabase con RLS", done: true },
-  { name: "Inspección de los documentos reales de agosto 2026", done: false },
-  { name: "Importación a Supabase y cierre de mes", done: false },
-  { name: "Integración con Google Drive", done: false },
-  { name: "Interfaz operativa mensual", done: false },
-];
+export default async function Home() {
+  const periods = await listAnalyzedPeriods();
 
-export default function Home() {
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center gap-8 px-6 py-16">
       <header className="space-y-2">
-        <p className="text-sm font-medium tracking-wide text-neutral-500 uppercase">
-          Antifrágil
-        </p>
+        <p className="text-sm font-medium tracking-wide text-neutral-500 uppercase">Antifrágil</p>
         <h1 className="text-3xl font-semibold tracking-tight">CFO</h1>
         <p className="text-neutral-600 dark:text-neutral-400">
-          Sistema financiero interno. Convierte extractos, facturas y ventas en un
-          ledger trazable, y el Cash Flow en una vista calculada sobre él.
+          Conciliación de los movimientos de tesorería (banco SL, banco SC y caja)
+          con su documentación justificativa.
         </p>
       </header>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-medium tracking-wide text-neutral-500 uppercase">
-          Estado
-        </h2>
-        <ul className="space-y-2">
-          {phases.map((phase) => (
-            <li key={phase.name} className="flex items-start gap-3 text-sm">
-              <span
-                aria-hidden
-                className={`mt-1.5 size-2 shrink-0 rounded-full ${
-                  phase.done ? "bg-emerald-500" : "bg-neutral-300 dark:bg-neutral-700"
-                }`}
-              />
-              <span className={phase.done ? "" : "text-neutral-500"}>
-                {phase.name}
-                <span className="sr-only">{phase.done ? " (completado)" : " (pendiente)"}</span>
-              </span>
-            </li>
-          ))}
-        </ul>
+        <h2 className="text-sm font-medium tracking-wide text-neutral-500 uppercase">Periodos</h2>
+        {periods.length === 0 ? (
+          <div className="rounded-lg border border-neutral-200 p-4 text-sm dark:border-neutral-800">
+            <p className="mb-3 text-neutral-600 dark:text-neutral-400">
+              Todavía no hay ningún periodo analizado. Procesa uno desde la terminal:
+            </p>
+            <pre className="overflow-x-auto rounded bg-neutral-100 p-3 text-xs dark:bg-neutral-900">
+              <code>{`npm run cfo -- inspect 2026-09
+npm run cfo -- analyze 2026-09`}</code>
+            </pre>
+          </div>
+        ) : (
+          <ul className="divide-y divide-neutral-200 rounded-lg border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
+            {periods.map((period) => (
+              <li key={period}>
+                <Link
+                  href={`/periodo/${period}`}
+                  className="flex items-center justify-between px-4 py-3 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-900"
+                >
+                  <span className="font-medium capitalize">{periodLabel(period)}</span>
+                  <span className="text-neutral-500">{period} →</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
-      <section className="space-y-3 rounded-lg border border-neutral-200 p-4 text-sm dark:border-neutral-800">
-        <h2 className="font-medium">El motor se usa desde la línea de comandos</h2>
-        <pre className="overflow-x-auto rounded bg-neutral-100 p-3 text-xs dark:bg-neutral-900">
-          <code>{`npm run cfo -- inspect 2026-08
-npm run cfo -- analyze 2026-08`}</code>
-        </pre>
-        <p className="text-neutral-600 dark:text-neutral-400">
-          Ningún comando escribe sobre los documentos originales del negocio.
-        </p>
-      </section>
+      <p className="text-xs text-neutral-500">
+        Los datos se leen de la carpeta local de trabajo. Ningún comando escribe sobre
+        los documentos originales del negocio.
+      </p>
     </main>
   );
 }

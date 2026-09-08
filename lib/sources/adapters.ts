@@ -6,37 +6,50 @@
  * sinónimos de `table.ts`, sin tocar las reglas financieras.
  */
 
+import { DEFAULT_ACCOUNTS } from "../finance/accounts";
 import { periodLabel } from "../finance/period";
 import { normalizeText } from "../finance/text";
 import type {
   BankMovement,
   CashMovement,
   ClinicSale,
-  Invoice,
+  DocumentType,
   Period,
   PeriodInput,
   SourceKind,
   SourceRef,
+  SupportingDocument,
+  TreasuryAccount,
 } from "../finance/types";
 import type { FileInspection, InspectionResult, SheetInspection } from "../inspect/inspect";
 import type { ParsedRow } from "./table";
 
 export interface AdaptationResult {
   input: PeriodInput;
-  /** Documentos que no se han podido convertir en datos (PDF, sin importe...). */
+  /** Documentos que no se han podido convertir en datos estructurados. */
   pendingDocuments: Array<{ file: string; reason: string }>;
   /** Problemas encontrados al convertir filas. Alimentan SOURCE_ERROR. */
   problems: Array<{ file: string; sheet: string; row: number; problems: string[] }>;
 }
 
-export function buildPeriodInput(inspection: InspectionResult): AdaptationResult {
+export interface AdaptOptions {
+  accounts?: TreasuryAccount[];
+  /** Documentos ya indexados desde Drive, si los hay. */
+  driveDocuments?: SupportingDocument[];
+}
+
+export function buildPeriodInput(
+  inspection: InspectionResult,
+  options: AdaptOptions = {},
+): AdaptationResult {
   const period = inspection.period;
+  const accounts = options.accounts ?? DEFAULT_ACCOUNTS;
+
   const bankMovements: BankMovement[] = [];
   const cashMovements: CashMovement[] = [];
   const clinicBankSales: ClinicSale[] = [];
   const clinicCashSales: ClinicSale[] = [];
-  const invoices: Invoice[] = [];
-  const incomeDocuments: Invoice[] = [];
+  const documents: SupportingDocument[] = [...(options.driveDocuments ?? [])];
   const pendingDocuments: AdaptationResult["pendingDocuments"] = [];
   const problems: AdaptationResult["problems"] = [];
 
@@ -46,13 +59,15 @@ export function buildPeriodInput(inspection: InspectionResult): AdaptationResult
       continue;
     }
 
+    // Documento no tabular (PDF, imagen): se registra como justificante local.
+    // Sin importe extraído solo podrá conciliarse por referencia, así que se
+    // deja constancia en lugar de inventarle cifras.
     if (!file.file.tabular) {
-      // Un PDF de factura sin importe legible no puede conciliarse por importe.
-      // Se registra como documento pendiente en lugar de inventar cifras.
+      documents.push(localDocument(file.file.relativePath, file.file.fileName));
       pendingDocuments.push({
         file: file.file.relativePath,
         reason:
-          "documento no tabular: se registra como justificante, pero sin importe extraído no puede conciliarse automáticamente",
+          "documento no tabular: indexado como justificante, pero sin importe extraído solo puede conciliarse por referencia",
       });
       continue;
     }
@@ -68,16 +83,17 @@ export function buildPeriodInput(inspection: InspectionResult): AdaptationResult
             problems: row.problems,
           });
         }
-        // Un índice de facturas se identifica por proveedor, no por concepto:
+
+        // Un índice de documentos se identifica por emisor, no por concepto:
         // exigirle una columna "Concepto" descartaría todas sus filas.
-        const isDocumentIndex =
-          file.file.kind === "expense_invoice" || file.file.kind === "income_document";
+        const isDocumentIndex = file.file.kind === "supporting_document";
         const label = isDocumentIndex ? (row.supplier ?? row.concept) : row.concept;
         if (row.date === null || row.amountCents === null || !label) continue;
 
         const source: SourceRef = {
           kind: file.file.kind === "unknown" ? "manual" : (file.file.kind as SourceKind),
           file: file.file.relativePath,
+          accountId: file.file.accountId,
           sheet: sheet.sheetName,
           row: row.rowNumber,
           raw: row.raw,
@@ -91,6 +107,7 @@ export function buildPeriodInput(inspection: InspectionResult): AdaptationResult
               concept: label,
               observations: row.observations,
               amountCents: row.amountCents,
+              accountId: file.file.accountId ?? accounts[0]?.id ?? "sl_bank",
               source,
             });
             break;
@@ -99,6 +116,7 @@ export function buildPeriodInput(inspection: InspectionResult): AdaptationResult
               date: row.date,
               concept: label,
               amountCents: row.amountCents,
+              accountId: file.file.accountId ?? "cash",
               category: row.category,
               pnl: row.pnl,
               source,
@@ -120,11 +138,12 @@ export function buildPeriodInput(inspection: InspectionResult): AdaptationResult
               source,
             });
             break;
-          case "expense_invoice":
-            invoices.push(toInvoice(row, source, file.file.relativePath));
+          case "supporting_document":
+            documents.push(toSupportingDocument(row, source, file.file.relativePath));
             break;
-          case "income_document":
-            incomeDocuments.push(toInvoice(row, source, file.file.relativePath));
+          case "manual":
+            // Cierre manual previo: es material de contraste, no una fuente de
+            // movimientos. Lo consume el comando `compare`.
             break;
           default:
             pendingDocuments.push({
@@ -140,37 +159,82 @@ export function buildPeriodInput(inspection: InspectionResult): AdaptationResult
   return {
     input: {
       period,
+      accounts,
       bankMovements,
       cashMovements,
       clinicBankSales,
       clinicCashSales,
-      invoices,
-      incomeDocuments,
+      documents,
     },
     pendingDocuments,
     problems,
   };
 }
 
-function toInvoice(row: ParsedRow, source: SourceRef, fileName: string): Invoice {
+function toSupportingDocument(
+  row: ParsedRow,
+  source: SourceRef,
+  fileName: string,
+): SupportingDocument {
+  const docType = inferDocTypeFromText(`${row.supplier ?? ""} ${row.concept ?? ""} ${fileName}`);
   return {
     id: `${fileName}#${source.sheet ?? ""}#${row.rowNumber}`,
-    supplier: row.supplier ?? row.concept ?? "(sin proveedor)",
-    invoiceNumber: row.invoiceNumber,
+    docType,
+    issuer: row.supplier ?? row.concept ?? "(sin emisor)",
+    reference: row.invoiceNumber,
     date: row.date ?? "",
-    amountCents: Math.abs(row.amountCents ?? 0),
+    amountCents: row.amountCents === null ? null : Math.abs(row.amountCents),
     document: {
-      name: row.invoiceNumber ? `${row.supplier ?? "factura"} ${row.invoiceNumber}` : fileName,
+      name: row.invoiceNumber ? `${row.supplier ?? "documento"} ${row.invoiceNumber}` : fileName,
+      docType,
       driveFileId: null,
       url: null,
       localPath: fileName,
-      supplier: row.supplier,
-      invoiceNumber: row.invoiceNumber,
+      issuer: row.supplier,
+      reference: row.invoiceNumber,
       date: row.date,
       amountCents: row.amountCents,
     },
     source,
   };
+}
+
+/** Documento local no tabular (PDF, imagen): se indexa sin inventar importe. */
+function localDocument(relativePath: string, fileName: string): SupportingDocument {
+  const docType = inferDocTypeFromText(fileName);
+  return {
+    id: relativePath,
+    docType,
+    issuer: fileName.replace(/\.[a-z0-9]{2,5}$/i, "").replace(/^[GI][_\s-]+/i, ""),
+    reference: null,
+    date: "",
+    amountCents: null,
+    document: {
+      name: fileName,
+      docType,
+      driveFileId: null,
+      url: null,
+      localPath: relativePath,
+    },
+    source: { kind: "supporting_document", file: relativePath },
+  };
+}
+
+/** Tipo documental deducido del texto disponible. "other" si no hay señal. */
+export function inferDocTypeFromText(text: string): DocumentType {
+  const normalized = normalizeText(text);
+  if (normalized.includes("nomina")) return "payroll";
+  if (normalized.includes("seguridad social") || normalized.includes("rnt") || normalized.includes("rlc")) {
+    return "social_security";
+  }
+  if (normalized.includes("modelo") || normalized.includes("impuesto") || normalized.includes("aeat")) {
+    return "tax";
+  }
+  if (normalized.includes("ventas")) return "sales_sheet";
+  if (normalized.includes("recibo")) return "receipt";
+  if (normalized.includes("contrato")) return "contract";
+  if (normalized.includes("factura") || normalized.includes("fra")) return "invoice";
+  return "other";
 }
 
 /**
@@ -182,7 +246,9 @@ function toInvoice(row: ParsedRow, source: SourceRef, fileName: string): Invoice
  * confía en el filtro por fecha del motor.
  */
 function selectSheets(file: FileInspection, period: Period): SheetInspection[] {
-  const usable = file.sheets.filter((s) => s.columnMap.headerRowIndex >= 0 && s.columnMap.confidence > 0);
+  const usable = file.sheets.filter(
+    (s) => s.columnMap.headerRowIndex >= 0 && s.columnMap.confidence > 0,
+  );
   const matching = usable.filter((s) => sheetMatchesPeriod(s.sheetName, period));
   return matching.length > 0 ? matching : usable;
 }

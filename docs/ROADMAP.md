@@ -1,51 +1,81 @@
 # Roadmap
 
-Estado a 3 de septiembre de 2026.
+Estado a 8 de septiembre de 2026.
+
+**Misión actual:** conciliar todos los movimientos reales de tesorería con su
+documentación y permitir revisar y clasificar las excepciones desde la interfaz.
 
 ---
 
-## ✅ Hecho — Fase 0 y fundación
+## ✅ Hecho
 
-- **Discovery técnico**: inspeccionados los repositorios Antifrágil locales (`App Lidomare`, `antifragil-portal`) para heredar stack, estructura, patrones Supabase y convenciones.
-- **Proyecto creado**: Next.js 16 + React 19 + TypeScript + Tailwind v4, `.gitignore` endurecido antes del primer commit.
-- **Motor financiero completo y testeado**: dinero en céntimos, fechas ISO, movimientos internos, datáfono, conciliación bidireccional, incidencias, clasificación por reglas, idempotencia y Cash Flow como vista.
-- **Lectura de fuentes**: XLSX/CSV con detección de cabeceras por sinónimos, sin posiciones fijas de celda.
-- **CLI**: `inspect`, `analyze`, `demo`. Ninguno escribe en documentos reales.
-- **Informes de auditoría**: inspección, conciliación, incidencias y resumen con Cash Flow.
-- **Esquema Supabase** con RLS en todas las tablas, sin políticas de DELETE y con las reglas financieras como restricciones CHECK.
-- **Documentación**: visión, reglas financieras, arquitectura, modelo de datos y runbook.
-- **40 tests** en verde, todos con datos sintéticos.
+### Fundación
+- Discovery de los repositorios Antifrágil y proyecto Next.js 16 + React 19 + TS + Tailwind v4.
+- `.gitignore` endurecido antes del primer commit. Repositorio público sin datos reales.
+
+### Modelo multi-cuenta
+- Tres tesorerías (banco SL, banco SC, caja) convergiendo en un único ledger.
+- Cada movimiento conserva su `accountId`, que además forma parte de su identificador.
+- Métricas y desglose por cuenta y entidad legal.
+
+### Motor de conciliación documental
+- Concepto de **documento justificativo** (factura, nómina, impuesto, Seguridad Social, recibo, hoja de ventas, contrato).
+- Estados: `pending`, `reconciled`, `missing_document`, `ambiguous`, `not_document_required`.
+- Cuatro cardinalidades: 1↔1, 1↔N, N↔1 y agregado de periodo (datáfono).
+- Toda asociación guarda **método, confianza y motivos**.
+- Reglas de "no requiere documento" (comisiones, intereses, movimientos internos) con motivo obligatorio.
+
+### Índice documental de Drive
+- Navegación **acotada a la rama del periodo**, descartando otros años, trimestres y meses.
+- Indexación idempotente por `drive_file_id`, con deducción de tipo, periodo, emisor e importe y registro de las señales usadas.
+- Cliente REST detrás de una interfaz, para que la decisión de autenticación (O1) no bloquee nada.
+
+### Cola de excepciones e interfaz
+- Cola priorizada: datáfono, sin documento, ambiguos, documentos sin movimiento, duplicados, sin clasificar.
+- Interfaz de lectura: portada de periodos y vista mensual con métricas MVP, desglose por tesorería, cola y tabla de movimientos con enlace al documento.
+
+### Comparación con cierres manuales
+- Motor de comparación que aísla diferencias y aporta evidencia, **sin decidir quién se equivocó**.
+
+### Calidad
+- **60 tests** en verde con datos sintéticos. Typecheck, lint y build limpios.
+- Esquema Supabase con RLS, sin DELETE, y reglas financieras como restricciones CHECK.
 
 ---
 
-## ⏭️ Siguiente — Agosto 2026 con documentos reales
+## ⏭️ Camino más corto hasta septiembre 2026
 
-### 1. Inspección (sin tocar nada)
-Ejecutar `inspect 2026-08` sobre los documentos reales y revisar el informe:
-¿se reconocen las cabeceras del extracto BBVA? ¿la pestaña `AGOSTO 26` de la cuenta
-de cash? ¿los Excels de ventas? Ajustar sinónimos de columna donde haga falta (O2).
+### 1. Extractos reales de las tres cuentas (bloqueante)
+Dejar en `local-data/inputs/2026-09/` los extractos de SL y SC, la cuenta de cash y
+los Excels de ventas de clínica. Ejecutar `inspect` y ajustar sinónimos de columna
+según el informe. Es lo único que hoy impide procesar un mes real.
 
-### 2. Modelo financiero histórico (Fase 2)
-Estudiar `Cash Flow GEA 2026`, especialmente **julio**: estructura, categorías,
-taxonomía de P&L, agregaciones y cálculos. Extraer la taxonomía completa y
-proponerla para validación. **No se inventa ninguna categoría.**
+### 2. Documentos: Drive o carpeta local
+Dos vías, y la primera ya sirve para arrancar:
+- **Rápida:** dejar los documentos del mes en `documents/`.
+- **Definitiva:** credencial de Drive (O1) + `NEXT_PUBLIC` de la carpeta raíz, y sincronizar el índice.
 
-### 3. Catálogo de reglas
-Con la taxonomía validada, convertir las clasificaciones recurrentes del histórico
-en reglas explícitas, auditables y trazables. Cada regla con su motivo escrito.
+### 3. Persistencia en Supabase
+Crear el proyecto, aplicar la migración, dar de alta miembros y validar RLS. Upsert
+idempotente sobre los ids deterministas. `lib/period-store.ts` pasa a leer de ahí.
 
-### 4. Facturas reales
-Decidir cómo indexar las facturas PDF (nombre, contenido o índice) para que el
-matching por importe funcione. Hoy los PDF se registran como documentos pendientes
-en lugar de inventarles cifras.
+### 4. Clasificación desde la interfaz
+Server Actions para asignar categoría y P&L, y para *"guardar esta decisión como
+regla"*. Es lo que reduce el trabajo mes a mes.
 
-### 5. Persistencia en Supabase
-Crear el proyecto, aplicar la migración, dar de alta miembros y validar RLS con un
-usuario real. Escritura idempotente por upsert sobre ids deterministas.
+### 5. Septiembre operativo
+Primer periodo producido íntegramente por Antifrágil CFO.
 
-### 6. Cierre de agosto (Fase 10)
-Cash Flow de agosto generado desde el ledger, revisado y aprobado. Es el criterio
-de éxito del MVP.
+---
+
+## En paralelo: agosto 2026 como control
+
+Reconstruir agosto desde las fuentes y ejecutar `compare 2026-08` contra el cierre
+manual. Cada diferencia se clasifica como error del motor, error histórico,
+diferencia de criterio o pendiente. **No se ajusta el motor para reproducir el
+cierre manual sin entender antes la causa.**
+
+Sirve para validar el motor; no bloquea el arranque de septiembre.
 
 ---
 
@@ -53,11 +83,9 @@ de éxito del MVP.
 
 | Fase | Contenido |
 |------|-----------|
-| Google Drive (Fase 6) | Navegación Año → Trimestre → Tipo → Mes. Nunca escanear todo Drive. Decidir método de autenticación (O1) |
-| Interfaz operativa (Fase 11) | Elegir mes, procesar, revisar incidencias, aprobar. Solo cuando el motor esté validado |
-| Migración histórica (Fase 12) | Enero–julio 2026 al nuevo sistema (O3) |
-| Automatización mensual (Fase 13) | Cierre reducido a importar y revisar excepciones |
-| Fuera del MVP | Balances, presupuestos, forecasting, reporting avanzado |
+| Automatización mensual | Cierre reducido a importar y revisar excepciones |
+| Migración histórica | Enero–julio 2026 al nuevo sistema (O3) |
+| Fuera del MVP | Cash Flow operativo, EBITDA, balances, presupuestos, forecasting, reporting |
 
 ---
 
@@ -65,13 +93,13 @@ de éxito del MVP.
 
 | ID | Pregunta | Quién decide |
 |----|----------|--------------|
-| O1 | Autenticación con Google Drive: OAuth vs Service Account | Claude propone / CTO valida |
-| O2 | Formato exacto del parser bancario BBVA | Se determina inspeccionando el extracto real |
+| O1 | Autenticación con Google Drive: OAuth vs cuenta de servicio | Claude propone / CTO valida |
+| O2 | Formato exacto de cada extracto (SL y SC pueden diferir) | Se determina inspeccionando los archivos reales |
 | O3 | Cuándo migrar enero–julio 2026 | Propietario |
 | O4 | Permisos de usuarios administrativos adicionales | Propietario |
 
-### Supuesto pendiente de confirmar con el histórico
+### Supuesto pendiente de confirmar
 
-La línea consolidada de datáfono reconoce el **importe cobrado en banco**. Si al
-inspeccionar julio resulta que el criterio histórico es reconocer la facturación,
-se cambia la regla, su test y `FINANCIAL_RULES.md`.
+La línea consolidada de datáfono reconoce el **importe cobrado en banco**. Si el
+criterio histórico es reconocer la facturación, se cambia la regla, su test y
+`FINANCIAL_RULES.md`.

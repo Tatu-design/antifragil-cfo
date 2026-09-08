@@ -27,12 +27,17 @@ export function stableHash(parts: Array<string | number | null | undefined>): st
 export interface StableIdInput {
   kind: SourceKind;
   period: string;
+  /**
+   * Cuenta de tesorería de origen. Forma parte de la identidad: el mismo
+   * importe el mismo día en la SL y en la SC son dos movimientos distintos.
+   */
+  accountId: string;
   date: string;
   amountCents: number;
   description: string;
   /**
    * Ordinal para movimientos económicamente idénticos dentro del mismo día y
-   * fuente. Dos cargos reales iguales el mismo día son dos apuntes legítimos y
+   * cuenta. Dos cargos reales iguales el mismo día son dos apuntes legítimos y
    * distintos, y deben conservar ids distintos y estables.
    */
   occurrence: number;
@@ -42,6 +47,7 @@ export function stableEntryId(input: StableIdInput): string {
   return stableHash([
     input.kind,
     input.period,
+    input.accountId,
     input.date,
     input.amountCents,
     normalizeText(input.description),
@@ -96,15 +102,17 @@ export function mergeEntries(
     }
     // Se preserva la decisión humana sobre la del motor.
     const humanClassified = prev.classificationStatus === "manual";
+    const humanReviewed = prev.reviewStatus === "approved" || prev.reviewStatus === "reviewed";
     byId.set(entry.id, {
       ...entry,
       category: humanClassified ? prev.category : entry.category,
       pnl: humanClassified ? prev.pnl : entry.pnl,
       classificationStatus: humanClassified ? prev.classificationStatus : entry.classificationStatus,
-      reviewStatus:
-        prev.reviewStatus === "approved" || prev.reviewStatus === "reviewed"
-          ? prev.reviewStatus
-          : entry.reviewStatus,
+      // Una conciliación ya revisada por una persona no se recalcula: si alguien
+      // asoció el documento a mano, reprocesar el mes no debe deshacerlo.
+      documents: humanReviewed ? prev.documents : entry.documents,
+      reconciliation: humanReviewed ? prev.reconciliation : entry.reconciliation,
+      reviewStatus: humanReviewed ? prev.reviewStatus : entry.reviewStatus,
     });
     updated.push(entry.id);
   }
@@ -127,7 +135,7 @@ export function findDuplicateSuspects(entries: LedgerEntry[]): LedgerEntry[][] {
       entry.date,
       entry.amountCents,
       normalizeText(entry.description),
-      entry.treasury,
+      entry.accountId,
     ]);
     const group = groups.get(key);
     if (group) group.push(entry);

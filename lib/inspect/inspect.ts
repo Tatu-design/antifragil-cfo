@@ -145,8 +145,7 @@ const KIND_LABELS: Record<SourceKind | "unknown", string> = {
   cash_account: "Cuenta de cash",
   clinic_bank_sales: "Ventas clínica — banco/datáfono",
   clinic_cash_sales: "Ventas clínica — efectivo",
-  expense_invoice: "Factura de gasto",
-  income_document: "Documento de ingreso",
+  supporting_document: "Documento justificativo",
   manual: "Entrada manual",
   unknown: "Sin clasificar",
 };
@@ -182,7 +181,11 @@ export function renderInspectionReport(result: InspectionResult): string {
   for (const [kind, list] of byKind) {
     out.push(`### ${KIND_LABELS[kind as SourceKind | "unknown"] ?? kind} (${list.length})`, "");
     for (const file of list) {
-      out.push(`- \`${file.relativePath}\` — ${formatBytes(file.sizeBytes)} — detectado por ${file.kindReason}`);
+      out.push(
+        `- \`${file.relativePath}\` — ${formatBytes(file.sizeBytes)}${
+          file.accountId ? ` — cuenta \`${file.accountId}\`` : ""
+        } — detectado por ${file.kindReason}`,
+      );
     }
     out.push("");
   }

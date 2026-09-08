@@ -15,22 +15,22 @@ con la variable `ANTIFRAGIL_CFO_DATA_DIR` en `.env.local`.
 ```text
 local-data/
 ├── inputs/<YYYY-MM>/
-│   ├── bank/           Extracto bancario del mes             (.xlsx / .csv)
-│   ├── expenses/       Facturas de gastos                    (.pdf y/o índice .xlsx/.csv)
-│   ├── income/         Documentos justificativos de ingresos
-│   ├── clinic_bank/    Ventas de clínica cobradas por banco/datáfono  (.xlsx)
-│   ├── clinic_cash/    Ventas de clínica cobradas en efectivo         (.xlsx)
-│   ├── cash_account/   Cuenta de cash Antifrágil                      (.xlsx)
-│   └── master/         Cash Flow GEA 2026 (referencia histórica)      (.xlsx)
+│   ├── bank_sl/        Extracto de la cuenta de la SL             (.xlsx / .csv)
+│   ├── bank_sc/        Extracto de la cuenta de la SC             (.xlsx / .csv)
+│   ├── cash_account/   Cuenta de cash Antifrágil                  (.xlsx)
+│   ├── clinic_bank/    Ventas de clínica cobradas por datáfono    (.xlsx)
+│   ├── clinic_cash/    Ventas de clínica cobradas en efectivo     (.xlsx)
+│   ├── documents/      Documentos justificativos (PDF o índice)
+│   └── manual_close/   Cierre manual previo, solo para comparar
 │
-├── outputs/<YYYY-MM>/  Informes generados por el motor
-├── backups/            Copias de documentos originales antes de cualquier escritura
+├── outputs/<YYYY-MM>/  Informes y ledger.json generados por el motor
+├── backups/            Copias de documentos originales
 └── logs/
 ```
 
 ## Notas
 
-- **La carpeta determina el tipo de documento.** Es más fiable que el nombre del archivo.
+- **La carpeta determina el tipo y la cuenta.** Un extracto en `bank_sl/` es de la SL: explícito y sin ambigüedad.
 - Los Google Sheets se descargan como `.xlsx` mientras no exista la integración con Drive.
 - Si un libro tiene pestañas mensuales, no hace falta recortarlo: el motor usa la del periodo.
 - Los archivos temporales de Office (`~$...`) se ignoran automáticamente.
@@ -38,6 +38,7 @@ local-data/
 ## Uso
 
 ```bash
-npm run cfo -- inspect 2026-08    # mirar sin tocar
-npm run cfo -- analyze 2026-08    # motor completo + informes
+npm run cfo -- inspect 2026-09    # mirar sin tocar
+npm run cfo -- analyze 2026-09    # motor completo + informes
+npm run cfo -- compare 2026-08    # contrastar con el cierre manual
 ```

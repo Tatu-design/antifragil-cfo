@@ -66,13 +66,29 @@ pero esto NO forma parte del MVP salvo que se decida posteriormente.
 
 ## 3. ¿Cuál es el objetivo central?
 
-Construir un sistema financiero mensual en el que el usuario pueda **subir el extracto bancario, procesar el mes y limitar su trabajo prácticamente a revisar excepciones**, obteniendo automáticamente un Cash Flow y un P&L trazables y fiables.
+> **Actualización de 8 de septiembre de 2026 — misión de esta etapa.**
+>
+> # CONCILIAR TODOS LOS MOVIMIENTOS REALES DE TESORERÍA CON SU DOCUMENTACIÓN Y PERMITIR AL USUARIO REVISAR Y CLASIFICAR LAS EXCEPCIONES DESDE UNA INTERFAZ.
+>
+> Esto es lo único prioritario ahora mismo. **No** son prioridad todavía: métricas
+> financieras avanzadas, Cash Flow operativo, EBITDA, balances, forecasting ni la
+> automatización completa de la clasificación.
 
-El primer mes que debe funcionar completamente de extremo a extremo es:
+A largo plazo el objetivo sigue siendo un sistema financiero mensual en el que el usuario suba los extractos, procese el mes y limite su trabajo a revisar excepciones. Pero el camino hasta ahí pasa primero por demostrar que **cada movimiento está en el ledger, con su cuenta de origen y su documento justificativo**.
 
-# AGOSTO 2026
+### Orden de prioridad de esta etapa
 
-Después el mismo proceso debe funcionar para septiembre, octubre y los meses siguientes sin tener que reconstruir la lógica.
+1. Movimiento correcto (todos, de las tres tesorerías, una sola vez).
+2. Documentación correcta (el documento que le corresponde, sea del tipo que sea).
+3. Conciliación correcta (con evidencia y confianza, sin forzar nada).
+4. Clasificación (categoría y P&L), que puede ser manual y asistida.
+
+### Meses de referencia
+
+* **Agosto 2026** ya se cerró manualmente. Se reconstruye desde cero con el motor y se **compara** contra ese cierre. Ninguna de las dos versiones se presume correcta.
+* **Septiembre 2026** será el **primer periodo operativo producido por Antifrágil CFO**.
+
+Después el mismo proceso debe funcionar para octubre y los meses siguientes sin reconstruir la lógica.
 
 ---
 
@@ -448,6 +464,27 @@ Claude NO debe cuestionarlas ni reabrirlas salvo instrucción explícita del pro
 | D52 | No se construirán funcionalidades decorativas antes de que el motor financiero funcione                            | Priorizar funcionalidad                                              |
 | D53 | Exactitud financiera tiene prioridad sobre automatización y estética                                               | Principio fundamental                                                |
 
+### Decisiones añadidas el 8 de septiembre de 2026
+
+| ID  | Decisión                                                                                                              | Razón                                                                       |
+| --- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| D54 | La misión de esta etapa es **conciliar movimientos con documentación y revisar excepciones desde una interfaz**       | Es lo que hoy consume el trabajo manual                                     |
+| D55 | Se procesan **tres tesorerías**: banco SL, banco SC y caja                                                            | Toda la actividad económica pasa por ellas                                  |
+| D56 | Todas convergen en un único ledger, pero **cada movimiento conserva su cuenta de origen**                             | Hay que poder cuadrar cada tesorería por separado                           |
+| D57 | El concepto es **documento justificativo**, no solo factura: nóminas, impuestos, Seguridad Social, recibos, ventas    | No todo gasto tiene factura, y no por eso está injustificado                |
+| D58 | Existe el estado **`not_document_required`** como estado FINAL legítimo                                               | Una comisión bancaria no tendrá factura nunca; tratarla como falta es ruido |
+| D59 | Estados de conciliación: `pending`, `reconciled`, `missing_document`, `ambiguous`, `not_document_required`            | Cubren los casos reales sin ambigüedad                                      |
+| D60 | El motor consulta un **índice documental en Supabase**, nunca recorre Drive en cada ejecución                          | Rápido, reproducible y auditable                                            |
+| D61 | La sincronización con Drive navega **solo la rama del periodo** y es idempotente (clave: `drive_file_id`)             | Evita escanear todo Drive y duplicar documentos                             |
+| D62 | El matching soporta 1↔1, 1↔N, N↔1 y agregados de periodo, y **guarda método, confianza y motivos**                    | Una nómina puede pagarse en dos cargos; un pago liquidar varias facturas    |
+| D63 | La clasificación puede quedar pendiente y resolverse **desde la interfaz**, con opción de guardar la decisión como regla | Reduce intervención con el tiempo sin decisiones opacas                     |
+| D64 | **Agosto 2026 es referencia, no verdad infalible.** Se reconstruye y se compara                                       | El cierre manual también puede contener errores                             |
+| D65 | Toda diferencia con el cierre manual nace como `pending` y la clasifica una persona                                   | Ni el motor ni el histórico se presumen correctos                           |
+| D66 | **Nunca** se ajusta el algoritmo para reproducir un posible error histórico                                           | Primero entender la causa; solo cambiar el motor si el equivocado es él     |
+| D67 | **Septiembre 2026** es el primer periodo operativo producido por la aplicación                                        | Objetivo operativo inmediato                                                |
+| D68 | Las métricas del MVP se limitan a: ingresos, gastos, flujo neto, por tesorería, % conciliado, nº pendientes, importe pendiente de justificar, gastos por categoría y por P&L | Todo lo demás distrae de la misión actual |
+| D69 | Cash Flow operativo, EBITDA, balances y reporting avanzado se deciden **después**                                     | No condicionan la arquitectura y hoy no aportan                             |
+
 ---
 
 ## 6. Decisiones abiertas ❓
@@ -496,26 +533,27 @@ Antifrágil CFO:
 
 ## 8. Fases del proyecto
 
-| Fase                                 | Qué incluye                                                                                     | Estado          |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------- | --------------- |
-| Fase 0 — Discovery técnico           | Inspeccionar repositorios Antifrágil, stack, convenciones, Supabase, Vercel, auth y estructura  | ✅ Completada    |
-| Fase 1 — Fundación Antifrágil CFO    | Crear repo, aplicación, Supabase, migraciones, RLS, auth, Vercel, estructura y documentación    | 🟡 En curso     |
-| Fase 2 — Modelo financiero histórico | Analizar Cash Flow GEA 2026 enero-julio, extraer categorías, P&L, reglas y modelo financiero    | ⬜ Pendiente     |
-| Fase 3 — Financial Ledger            | Crear estructura central de periodos, transacciones, categorías, tesorería, fuentes y auditoría | 🟡 En curso     |
-| Fase 4 — Importación bancaria        | Upload extracto, parser, preview, normalización, hashes e idempotencia                          | 🟡 En curso     |
-| Fase 5 — Motor de clasificación      | Reglas históricas, proveedores normalizados, coincidencias y cola pendiente                     | 🟡 En curso     |
-| Fase 6 — Integración Google Drive    | Resolver carpeta por año/trimestre/mes, indexar documentos y almacenar metadatos                | ⬜ Pendiente     |
-| Fase 7 — Conciliación documental     | Banco→facturas, facturas→banco/cash, incidencias y matching                                     | 🟡 En curso     |
-| Fase 8 — Ingresos clínica            | Datáfono, ventas banco, ventas cash e ingresos no datáfono                                      | 🟡 En curso     |
-| Fase 9 — Cuenta cash                 | Importar gastos cash válidos y excluir movimientos internos                                     | 🟡 En curso     |
-| Fase 10 — Cash Flow agosto 2026      | Construcción completa del primer mes, revisión y aprobación                                     | ⬜ Pendiente     |
-| Fase 11 — Interfaz operativa MVP     | Dashboard mensual, movimientos, incidencias, Cash Flow y reglas                                 | ⬜ Pendiente     |
-| Fase 12 — Migración histórica        | Incorporar enero-julio 2026 a Supabase                                                          | ⬜ Pendiente     |
-| Fase 13 — Automatización mensual     | Reducir operación mensual a importación + revisión de excepciones                               | ⬜ Pendiente     |
-| Futuro                               | Balances, presupuestos, forecasting, dashboards avanzados y reporting                           | ⬜ Fuera del MVP |
+Reordenadas el 8 de septiembre de 2026 según la misión de conciliación.
 
-> Las fases marcadas "En curso" tienen su lógica implementada y testeada contra datos sintéticos.
-> Se darán por completadas cuando funcionen sobre los documentos reales de agosto 2026.
+| Fase                                    | Qué incluye                                                                                          | Estado          |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------- |
+| Fase 0 — Discovery técnico              | Repositorios Antifrágil, stack, convenciones, Supabase, Vercel, auth y estructura                     | ✅ Completada    |
+| Fase 1 — Fundación                      | Repo, aplicación, migraciones, RLS, estructura y documentación                                        | ✅ Completada    |
+| Fase 2 — Modelo multi-cuenta            | Banco SL, banco SC y caja convergiendo en un ledger, cada apunte con su cuenta                        | ✅ Completada    |
+| Fase 3 — Motor de conciliación          | Documento justificativo, 4 cardinalidades de matching, evidencia, `not_document_required`             | ✅ Completada    |
+| Fase 4 — Cola de excepciones            | Movimientos sin documento, documentos sin movimiento, ambiguos, sin clasificar, datáfono              | ✅ Completada    |
+| Fase 5 — Interfaz operativa (lectura)   | Movimientos por cuenta, estado documental, cola de revisión y métricas del MVP                        | ✅ Completada    |
+| Fase 6 — Índice documental Drive        | Navegación acotada al periodo, indexación idempotente y metadatos                                     | 🟡 Motor listo; falta credencial y persistencia |
+| Fase 7 — Persistencia en Supabase       | Aplicar migración, upsert idempotente del ledger, documentos e incidencias                            | ⬜ Siguiente     |
+| Fase 8 — Clasificación desde la interfaz| Elegir categoría y P&L, y "guardar esta decisión como regla"                                          | ⬜ Siguiente     |
+| Fase 9 — Reconstrucción de agosto 2026  | Reconstruir el mes y compararlo con el cierre manual, clasificando cada diferencia                    | 🟡 Motor listo; faltan los archivos reales |
+| Fase 10 — Septiembre 2026 operativo     | Primer periodo producido íntegramente por Antifrágil CFO                                              | ⬜ Objetivo      |
+| Fase 11 — Automatización mensual        | Cierre reducido a importar y revisar excepciones                                                      | ⬜ Pendiente     |
+| Fase 12 — Migración histórica           | Incorporar enero-julio 2026                                                                           | ⬜ Pendiente     |
+| Futuro                                  | Cash Flow operativo, EBITDA, balances, presupuestos, forecasting y reporting                          | ⬜ Fuera del MVP |
+
+> "Completada" significa: implementado y cubierto por tests con datos sintéticos.
+> La validación definitiva llega con los documentos reales de agosto y septiembre.
 
 ---
 
@@ -1397,9 +1435,29 @@ Regla:
 
 ## 10. Métricas de éxito
 
-### MVP — Agosto 2026
+### MVP de conciliación (criterio vigente desde el 8 de septiembre de 2026)
 
-El proyecto se considerará funcional cuando podamos procesar agosto 2026 y comprobar que:
+El MVP estará conseguido cuando, para un mes completo:
+
+* Los movimientos de las **tres tesorerías** (banco SL, banco SC y caja) están en el ledger una sola vez y cada uno conserva su cuenta.
+* Cada movimiento tiene un estado documental explícito: `reconciled`, `missing_document`, `ambiguous` o `not_document_required`.
+* Cada asociación automática guarda **método, confianza y motivos**.
+* Los documentos de Drive del periodo están indexados y consultables sin recorrer todo Drive.
+* Los documentos sin movimiento están identificados y **no** se han convertido en gasto.
+* El datáfono está conciliado por suma mensual, o su diferencia está reportada sin ajustar.
+* La cola de revisión contiene exactamente las excepciones, y nada más.
+* El usuario puede ver todo eso en la interfaz y clasificar lo que falte.
+* Reprocesar el mes no duplica nada.
+
+### Métricas del MVP (y solo estas)
+
+Ingresos totales · gastos totales · flujo neto de caja · movimientos y neto por tesorería ·
+% de movimientos conciliados · nº de movimientos pendientes · importe pendiente de justificar ·
+gastos por categoría · gastos por P&L.
+
+### Comprobaciones heredadas (agosto 2026)
+
+Siguen siendo válidas al reconstruir agosto y compararlo con el cierre manual:
 
 * El 100% de movimientos del extracto quedan importados una sola vez.
 * Reimportar el mismo extracto no genera duplicados.
@@ -1436,4 +1494,4 @@ El objetivo final es que el cierre financiero mensual pase de ser un trabajo man
 
 ---
 
-*Última actualización: 3 de septiembre de 2026 por el propietario de Antifrágil CFO*
+*Última actualización: 8 de septiembre de 2026 — reorientación a la misión de conciliación (D54-D69).*

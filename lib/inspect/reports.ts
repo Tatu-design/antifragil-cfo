@@ -1,14 +1,15 @@
 /**
  * Informes de auditoría de una ejecución mensual.
  *
- * Requisito D49: cualquier cifra debe poder rastrearse hasta su archivo y fila.
- * Estos informes son la forma en que el motor se explica ante una persona.
+ * Cualquier cifra debe poder rastrearse hasta su archivo y fila. Estos informes
+ * son la forma en que el motor se explica ante una persona.
  */
 
-import { renderCashFlowMarkdown, type CashFlowView } from "../finance/cashflow";
 import { describeIncident } from "../finance/incidents";
 import { formatCents } from "../finance/money";
 import { periodLabel } from "../finance/period";
+import { renderPeriodMarkdown, type PeriodView } from "../finance/period-view";
+import { QUEUE_LABELS } from "../finance/review-queue";
 import type { PeriodLedger } from "../finance/types";
 import type { AdaptationResult } from "../sources/adapters";
 
@@ -18,6 +19,22 @@ export function renderReconciliationReport(
 ): string {
   const out: string[] = [];
   out.push(`# Informe de conciliación — ${periodLabel(ledger.period)}`, "");
+
+  // ── Estado documental por cuenta ──────────────────────────────────────────
+  out.push("## Estado documental por tesorería", "");
+  out.push("| Cuenta | Movimientos | Conciliados | Sin documento | Ambiguos | No requieren doc. |");
+  out.push("|--------|-------------|-------------|---------------|----------|-------------------|");
+  for (const account of ledger.accounts) {
+    const rows = ledger.entries.filter((e) => e.accountId === account.id);
+    if (rows.length === 0) continue;
+    out.push(
+      `| ${account.label} | ${rows.length} | ${count(rows, "reconciled")} | ${count(
+        rows,
+        "missing_document",
+      )} | ${count(rows, "ambiguous")} | ${count(rows, "not_document_required")} |`,
+    );
+  }
+  out.push("");
 
   // ── Datáfono ──────────────────────────────────────────────────────────────
   out.push("## Datáfono de clínica", "");
@@ -34,35 +51,20 @@ export function renderReconciliationReport(
       "",
     );
     if (!card.reconciled) {
-      out.push(
-        "> Las cifras no se han ajustado. La diferencia queda como incidencia para revisión.",
-        "",
-      );
+      out.push("> Las cifras no se han ajustado. La diferencia queda para revisión.", "");
     }
   }
 
-  // ── Gastos ────────────────────────────────────────────────────────────────
-  const expenses = ledger.entries.filter((e) => e.direction === "expense");
-  const matched = expenses.filter((e) => e.reconciliation === "matched");
-  const missing = expenses.filter((e) => e.reconciliation === "missing_document");
-  const ambiguous = expenses.filter((e) => e.reconciliation === "ambiguous");
-
-  out.push("## Gastos → facturas", "");
-  out.push(
-    `- Gastos analizados: **${expenses.length}**`,
-    `- Conciliados con factura: **${matched.length}**`,
-    `- Sin factura localizada: **${missing.length}**`,
-    `- Con asociación ambigua (sin asociar): **${ambiguous.length}**`,
-    "",
-  );
-
+  // ── Movimientos sin documento ─────────────────────────────────────────────
+  const missing = ledger.entries.filter((e) => e.reconciliation === "missing_document");
+  out.push("## Movimientos sin documento justificativo", "");
+  out.push(`- Total: **${missing.length}**`, "");
   if (missing.length > 0) {
-    out.push("### Gastos sin factura", "");
-    out.push("| Fecha | Gasto | Tesorería | Importe | Origen |");
-    out.push("|-------|-------|-----------|---------|--------|");
+    out.push("| Fecha | Cuenta | Concepto | Importe | Origen |");
+    out.push("|-------|--------|----------|---------|--------|");
     for (const entry of missing) {
       out.push(
-        `| ${entry.date} | ${escape(entry.description)} | ${entry.treasury} | ${formatCents(
+        `| ${entry.date} | ${entry.accountId} | ${escape(entry.description)} | ${formatCents(
           entry.amountCents,
         )} | ${escape(sourceLabel(entry.source.file, entry.source.row))} |`,
       );
@@ -70,45 +72,74 @@ export function renderReconciliationReport(
     out.push("");
   }
 
-  // ── Facturas sin movimiento ───────────────────────────────────────────────
-  const invoiceIncidents = ledger.incidents.filter((i) => i.type === "INVOICE_WITHOUT_MOVEMENT");
-  out.push("## Facturas → movimientos", "");
-  out.push(`- Facturas sin movimiento localizado: **${invoiceIncidents.length}**`, "");
-  if (invoiceIncidents.length > 0) {
-    out.push("> Ninguna se ha convertido en gasto. Pueden estar pendientes de pago,", "");
-    out.push("> pagadas en otro mes o por otra vía.", "");
-    for (const incident of invoiceIncidents) {
-      out.push(`- ${incident.message}`);
+  // ── Movimientos que no requieren documento ────────────────────────────────
+  const notRequired = ledger.entries.filter((e) => e.reconciliation === "not_document_required");
+  if (notRequired.length > 0) {
+    out.push("## Movimientos que no requieren documento", "");
+    out.push("_Estado final legítimo, no una excepción pendiente._", "");
+    for (const entry of notRequired) {
+      out.push(
+        `- ${entry.date} · ${entry.accountId} · ${entry.description} · ${formatCents(
+          entry.amountCents,
+        )} — ${entry.reconciliationReason ?? "sin motivo registrado"}`,
+      );
     }
     out.push("");
   }
 
-  // ── Ingresos ──────────────────────────────────────────────────────────────
-  const incomeIncidents = ledger.incidents.filter((i) => i.type === "INCOME_WITHOUT_INVOICE");
-  out.push("## Ingresos bancarios (no datáfono)", "");
-  out.push(`- Ingresos sin factura localizada: **${incomeIncidents.length}**`, "");
-  for (const incident of incomeIncidents) out.push(`- ${incident.message}`);
-  out.push("");
+  // ── Documentos sin movimiento ─────────────────────────────────────────────
+  out.push("## Documentos sin movimiento localizado", "");
+  out.push(`- Total: **${ledger.unmatchedDocuments.length}**`, "");
+  if (ledger.unmatchedDocuments.length > 0) {
+    out.push("> Ninguno se ha convertido en movimiento. Pueden estar pendientes de pago,", "");
+    out.push("> pagados en otro mes o por otra vía.", "");
+    for (const document of ledger.unmatchedDocuments) {
+      out.push(
+        `- ${document.date || "(sin fecha)"} · ${document.docType} · ${document.issuer} · ${
+          document.amountCents === null ? "importe no extraído" : formatCents(document.amountCents)
+        } — \`${document.document.name}\``,
+      );
+    }
+    out.push("");
+  }
+
+  // ── Asociaciones automáticas y su evidencia ───────────────────────────────
+  const reconciled = ledger.entries.filter(
+    (e) => e.reconciliation === "reconciled" && e.documents.length > 0,
+  );
+  if (reconciled.length > 0) {
+    out.push("## Asociaciones realizadas y su evidencia", "");
+    out.push("| Fecha | Concepto | Documento(s) | Método | Confianza | Motivos |");
+    out.push("|-------|----------|--------------|--------|-----------|---------|");
+    for (const entry of reconciled) {
+      const first = entry.documents[0];
+      out.push(
+        `| ${entry.date} | ${escape(entry.description)} | ${escape(
+          entry.documents.map((d) => d.ref.name).join(", "),
+        )} | ${first.method} | ${first.score === null ? "manual" : first.score.toFixed(2)} | ${escape(
+          first.reasons.join("; "),
+        )} |`,
+      );
+    }
+    out.push("");
+  }
 
   // ── Movimientos internos ──────────────────────────────────────────────────
   const internal = ledger.entries.filter((e) => e.direction === "internal");
   out.push("## Movimientos internos de tesorería", "");
-  out.push(
-    `- Detectados: **${internal.length}** (excluidos del resultado, como debe ser)`,
-    "",
-  );
+  out.push(`- Detectados: **${internal.length}** (excluidos del resultado)`, "");
   for (const entry of internal) {
     out.push(
-      `- ${entry.date} · ${entry.description} · ${formatCents(entry.amountCents)} — ${
-        entry.notes?.[0] ?? "movimiento interno"
-      }`,
+      `- ${entry.date} · ${entry.accountId} · ${entry.description} · ${formatCents(
+        entry.amountCents,
+      )} — ${entry.notes?.[0] ?? "movimiento interno"}`,
     );
   }
   out.push("");
 
   // ── Fuentes no incorporadas ───────────────────────────────────────────────
   if (adaptation.pendingDocuments.length > 0) {
-    out.push("## Documentos no incorporados automáticamente", "");
+    out.push("## Documentos no convertidos en datos estructurados", "");
     for (const doc of adaptation.pendingDocuments) {
       out.push(`- \`${doc.file}\` — ${doc.reason}`);
     }
@@ -118,7 +149,9 @@ export function renderReconciliationReport(
   if (adaptation.problems.length > 0) {
     out.push("## Filas con problemas de lectura", "");
     for (const problem of adaptation.problems.slice(0, 50)) {
-      out.push(`- \`${problem.file}\` hoja "${problem.sheet}" fila ${problem.row}: ${problem.problems.join("; ")}`);
+      out.push(
+        `- \`${problem.file}\` hoja "${problem.sheet}" fila ${problem.row}: ${problem.problems.join("; ")}`,
+      );
     }
     if (adaptation.problems.length > 50) {
       out.push(`- … y ${adaptation.problems.length - 50} más.`);
@@ -129,40 +162,47 @@ export function renderReconciliationReport(
   return out.join("\n");
 }
 
-export function renderRunSummary(ledger: PeriodLedger, view: CashFlowView): string {
+export function renderRunSummary(ledger: PeriodLedger, view: PeriodView): string {
   const out: string[] = [];
   const s = ledger.summary;
 
   out.push(`# Resumen de ejecución — ${periodLabel(ledger.period)}`, "");
   out.push(
-    `- Apuntes en el ledger: **${s.entryCount}**`,
+    `- Movimientos en el ledger: **${s.entryCount}**`,
     `- Ingresos: **${formatCents(s.incomeCents)}**`,
     `- Gastos: **${formatCents(s.expenseCents)}**`,
-    `- Resultado: **${formatCents(s.netCents)}**`,
+    `- Flujo neto de caja: **${formatCents(s.netCents)}**`,
+    `- Movimientos conciliados: **${s.reconciledPct}%**`,
+    `- Importe pendiente de justificar: **${formatCents(s.unjustifiedAmountCents)}**`,
     `- Movimientos internos (fuera del resultado): **${s.internalMovementCount}**`,
     `- Pendientes de clasificar: **${s.pendingClassificationCount}**`,
-    `- Gasto con factura: **${formatCents(s.withInvoiceCents)}** · sin factura: **${formatCents(
-      s.withoutInvoiceCents,
-    )}**`,
     "",
   );
 
+  out.push("## Cola de revisión", "");
+  if (view.queue.items.length === 0) {
+    out.push("_Vacía._", "");
+  } else {
+    for (const [reason, count] of Object.entries(view.queue.counts)) {
+      if (count === 0) continue;
+      out.push(`- ${QUEUE_LABELS[reason as keyof typeof QUEUE_LABELS]}: **${count}**`);
+    }
+    out.push("");
+  }
+
   out.push("## Incidencias", "");
-  const total = ledger.incidents.length;
-  if (total === 0) {
+  if (ledger.incidents.length === 0) {
     out.push("_Ninguna._", "");
   } else {
     for (const [type, count] of Object.entries(s.incidentCountByType)) {
       out.push(`- ${type}: **${count}**`);
     }
-    out.push("");
-    out.push("### Detalle", "");
-    out.push("```");
+    out.push("", "### Detalle", "", "```");
     for (const incident of ledger.incidents) out.push(describeIncident(incident));
     out.push("```", "");
   }
 
-  out.push(renderCashFlowMarkdown(view), "");
+  out.push(renderPeriodMarkdown(view), "");
 
   out.push("## Estado", "");
   const blocking = ledger.incidents.filter((i) => i.severity === "error").length;
@@ -170,15 +210,22 @@ export function renderRunSummary(ledger: PeriodLedger, view: CashFlowView): stri
     out.push(
       `⛔ **${blocking} incidencia(s) de gravedad ERROR.** El mes no debe darse por cerrado hasta resolverlas.`,
     );
-  } else if (s.pendingClassificationCount > 0) {
+  } else if (view.queue.items.length > 0) {
     out.push(
-      `🟡 Sin errores bloqueantes, pero quedan **${s.pendingClassificationCount}** apuntes por clasificar manualmente.`,
+      `🟡 Sin errores bloqueantes, pero quedan **${view.queue.items.length}** elementos en la cola de revisión.`,
     );
   } else {
-    out.push("🟢 Sin incidencias bloqueantes y sin apuntes pendientes de clasificar.");
+    out.push("🟢 Sin incidencias bloqueantes y sin nada pendiente de revisar.");
   }
 
   return out.join("\n");
+}
+
+function count(
+  entries: PeriodLedger["entries"],
+  status: PeriodLedger["entries"][number]["reconciliation"],
+): number {
+  return entries.filter((e) => e.reconciliation === status).length;
 }
 
 function escape(value: string): string {

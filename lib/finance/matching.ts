@@ -1,44 +1,60 @@
 /**
- * Conciliación documental bidireccional (D38/D39).
+ * Conciliación documental bidireccional.
  *
- *   A) movimiento → factura : ¿este gasto tiene su factura?
- *   B) factura → movimiento : ¿esta factura está pagada?
+ *   A) movimiento → documento : ¿este movimiento está justificado?
+ *   B) documento → movimiento : ¿este documento está pagado/cobrado?
  *
- * PRINCIPIO: nunca forzar una asociación dudosa. Es preferible una incidencia
- * a revisar que un cruce inventado. Un match erróneo contamina el ledger de
- * forma silenciosa; una incidencia solo cuesta un minuto de revisión.
+ * Cardinalidades soportadas:
+ *   1 movimiento ↔ 1 documento    caso habitual
+ *   1 movimiento ↔ N documentos   un pago que liquida varias facturas
+ *   N movimientos ↔ 1 documento   una nómina o un impuesto pagado en varios cargos
+ *   agregado de periodo           datáfono (ver card-settlements.ts)
+ *
+ * PRINCIPIO: nunca forzar una asociación dudosa. Un match erróneo contamina el
+ * ledger en silencio; una incidencia solo cuesta un minuto de revisión.
+ *
+ * Toda asociación automática guarda método, confianza y motivos, para poder
+ * auditar meses después por qué el motor decidió lo que decidió.
  */
 
-import { absCents } from "./money";
+import { absCents, sumCents } from "./money";
 import { daysBetween } from "./period";
 import { similarity } from "./text";
-import type { Invoice, LedgerEntry } from "./types";
+import type {
+  AttachedDocument,
+  LedgerEntry,
+  SupportingDocument,
+} from "./types";
 
 export interface MatchConfig {
   /** Tolerancia de importe en céntimos. 0 = el importe debe ser exacto. */
   amountToleranceCents: number;
-  /** Ventana de días admitida entre fecha de factura y fecha de pago. */
+  /** Ventana de días admitida entre fecha del documento y fecha del pago. */
   dateWindowDays: number;
-  /** Similitud mínima de contraparte para aceptar un match automático. */
-  minSupplierSimilarity: number;
+  /** Similitud mínima de emisor para aceptar un match automático. */
+  minIssuerSimilarity: number;
   /**
    * Distancia mínima entre el mejor candidato y el segundo para considerar el
-   * match inequívoco. Si dos candidatos puntúan casi igual → AMBIGUOUS_MATCH.
+   * match inequívoco. Si dos candidatos puntúan casi igual → ambiguo.
    */
   minScoreGap: number;
+  /** Máximo de movimientos que pueden sumar para justificar un documento. */
+  maxAggregateSize: number;
 }
 
 export const DEFAULT_MATCH_CONFIG: MatchConfig = {
   amountToleranceCents: 0,
   dateWindowDays: 45,
-  minSupplierSimilarity: 0.45,
+  minIssuerSimilarity: 0.45,
   minScoreGap: 0.15,
+  maxAggregateSize: 4,
 };
 
 export interface Candidate {
-  invoice: Invoice;
+  document: SupportingDocument;
   score: number;
   reasons: string[];
+  method: AttachedDocument["method"];
 }
 
 export type MatchOutcome =
@@ -47,66 +63,82 @@ export type MatchOutcome =
   | { status: "unmatched"; candidates: Candidate[] };
 
 /**
- * Puntúa una factura frente a un apunte de gasto.
+ * Puntúa un documento frente a un movimiento.
  *
- * El importe es condición NECESARIA: si no coincide dentro de tolerancia, la
- * factura queda descartada (score 0). Sobre esa base, fecha y proveedor
- * modulan la confianza.
+ * El importe es condición NECESARIA: si no coincide dentro de tolerancia, el
+ * documento queda descartado. Sobre esa base, fecha y emisor modulan la
+ * confianza. Un documento sin importe extraído no puede puntuarse por importe
+ * y solo se acepta si su referencia aparece literalmente en el concepto.
  */
 export function scoreCandidate(
   entry: LedgerEntry,
-  invoice: Invoice,
+  document: SupportingDocument,
   config: MatchConfig = DEFAULT_MATCH_CONFIG,
 ): Candidate | null {
-  const entryAmount = absCents(entry.amountCents);
-  const invoiceAmount = absCents(invoice.amountCents);
-  const amountDiff = Math.abs(entryAmount - invoiceAmount);
+  const referenceHit = hasReferenceInConcept(entry, document);
+
+  if (document.amountCents === null) {
+    // Sin importe no hay prueba numérica. Solo la referencia literal basta.
+    if (!referenceHit) return null;
+    return {
+      document,
+      score: 0.7,
+      reasons: ["referencia del documento presente en el concepto", "documento sin importe extraído"],
+      method: "reference_in_concept",
+    };
+  }
+
+  const amountDiff = Math.abs(absCents(entry.amountCents) - absCents(document.amountCents));
   if (amountDiff > config.amountToleranceCents) return null;
 
   const reasons: string[] = [
     amountDiff === 0 ? "importe exacto" : `importe dentro de tolerancia (${amountDiff} cts)`,
   ];
 
-  const days = Math.abs(daysBetween(invoice.date, entry.date));
+  const days = Math.abs(daysBetween(document.date, entry.date));
   if (days > config.dateWindowDays) return null;
   reasons.push(days === 0 ? "misma fecha" : `${days} día(s) de diferencia`);
 
-  // Cercanía temporal: 1.0 el mismo día, decayendo hasta 0 en el borde de la ventana.
+  // Cercanía temporal: 1.0 el mismo día, decayendo hasta 0 en el borde.
   const dateScore = 1 - days / (config.dateWindowDays + 1);
 
-  const supplierScore = Math.max(
-    similarity(entry.description, invoice.supplier),
-    entry.counterparty ? similarity(entry.counterparty, invoice.supplier) : 0,
-    similarity(entry.rawDescription, invoice.supplier),
+  const issuerScore = Math.max(
+    similarity(entry.description, document.issuer),
+    entry.counterparty ? similarity(entry.counterparty, document.issuer) : 0,
+    similarity(entry.rawDescription, document.issuer),
   );
-  if (supplierScore > 0) reasons.push(`proveedor ~${supplierScore.toFixed(2)}`);
+  if (issuerScore > 0) reasons.push(`emisor ~${issuerScore.toFixed(2)}`);
 
-  // Un número de factura presente en el concepto bancario es una señal fuerte.
-  let invoiceNumberBonus = 0;
-  if (invoice.invoiceNumber && invoice.invoiceNumber.length >= 4) {
-    const needle = invoice.invoiceNumber.toLowerCase();
-    if (entry.rawDescription.toLowerCase().includes(needle)) {
-      invoiceNumberBonus = 0.25;
-      reasons.push("nº de factura presente en el concepto");
-    }
+  let referenceBonus = 0;
+  if (referenceHit) {
+    referenceBonus = 0.25;
+    reasons.push("referencia presente en el concepto");
   }
 
-  const score = Math.min(
-    1,
-    0.5 + 0.2 * dateScore + 0.3 * supplierScore + invoiceNumberBonus,
-  );
+  const score = Math.min(1, 0.5 + 0.2 * dateScore + 0.3 * issuerScore + referenceBonus);
 
-  return { invoice, score, reasons };
+  return {
+    document,
+    score,
+    reasons,
+    method: referenceHit ? "reference_in_concept" : "amount_date_issuer",
+  };
 }
 
-/** Busca la factura de un apunte de gasto entre las facturas disponibles. */
-export function matchEntryToInvoices(
+function hasReferenceInConcept(entry: LedgerEntry, document: SupportingDocument): boolean {
+  const reference = document.reference;
+  if (!reference || reference.length < 4) return false;
+  return entry.rawDescription.toLowerCase().includes(reference.toLowerCase());
+}
+
+/** Busca el documento de un movimiento entre los disponibles. */
+export function matchEntryToDocuments(
   entry: LedgerEntry,
-  invoices: Invoice[],
+  documents: SupportingDocument[],
   config: MatchConfig = DEFAULT_MATCH_CONFIG,
 ): MatchOutcome {
-  const candidates = invoices
-    .map((invoice) => scoreCandidate(entry, invoice, config))
+  const candidates = documents
+    .map((document) => scoreCandidate(entry, document, config))
     .filter((c): c is Candidate => c !== null)
     .sort((a, b) => b.score - a.score);
 
@@ -115,13 +147,11 @@ export function matchEntryToInvoices(
   const [best, second] = candidates;
 
   // Coincide el importe pero nada más respalda la asociación: no se fuerza.
-  const supplierSupported =
-    best.score >= 0.5 + 0.3 * config.minSupplierSimilarity ||
-    best.reasons.includes("nº de factura presente en el concepto");
+  const supported =
+    best.method === "reference_in_concept" ||
+    best.score >= 0.5 + 0.3 * config.minIssuerSimilarity;
 
-  if (!supplierSupported) {
-    return { status: "ambiguous", candidates: candidates.slice(0, 5) };
-  }
+  if (!supported) return { status: "ambiguous", candidates: candidates.slice(0, 5) };
 
   if (second && best.score - second.score < config.minScoreGap) {
     return { status: "ambiguous", candidates: candidates.slice(0, 5) };
@@ -130,121 +160,132 @@ export function matchEntryToInvoices(
   return { status: "matched", candidate: best };
 }
 
-export interface ReconciliationResult {
-  /** Apuntes con su conciliación y documentos ya asignados. */
-  entries: LedgerEntry[];
-  /** Facturas que no han podido asociarse a ningún movimiento. */
-  unmatchedInvoices: Invoice[];
-  /** Apuntes con más de un candidato plausible. */
-  ambiguous: Array<{ entry: LedgerEntry; candidates: Candidate[] }>;
+/**
+ * N movimientos ↔ 1 documento.
+ *
+ * Caso real: una nómina o un impuesto que se paga en dos o tres cargos, o un
+ * proveedor al que se le liquidan varios recibos con un único documento.
+ *
+ * Solo se acepta si la suma es EXACTA, todos los movimientos caen dentro de la
+ * ventana de fechas y al menos uno apunta al emisor. Se busca el grupo más
+ * pequeño posible: cuantos menos movimientos, más creíble la agrupación.
+ */
+export function findAggregateMatch(
+  entries: LedgerEntry[],
+  document: SupportingDocument,
+  config: MatchConfig = DEFAULT_MATCH_CONFIG,
+): { entries: LedgerEntry[]; reasons: string[]; score: number } | null {
+  if (document.amountCents === null || document.amountCents === 0) return null;
+  const target = absCents(document.amountCents);
+
+  const eligible = entries.filter((entry) => {
+    if (entry.direction === "internal") return false;
+    if (entry.documents.length > 0) return false;
+    if (Math.abs(daysBetween(document.date, entry.date)) > config.dateWindowDays) return false;
+    return absCents(entry.amountCents) < target;
+  });
+
+  if (eligible.length < 2) return null;
+  const best = findSubsetSummingTo(eligible, target, config.maxAggregateSize);
+  if (!best) return null;
+
+  const issuerScore = Math.max(
+    ...best.map((entry) => similarity(entry.rawDescription, document.issuer)),
+  );
+  if (issuerScore < config.minIssuerSimilarity) return null;
+
+  return {
+    entries: best,
+    score: Math.min(1, 0.55 + 0.3 * issuerScore),
+    reasons: [
+      `${best.length} movimientos suman exactamente el importe del documento`,
+      `emisor ~${issuerScore.toFixed(2)}`,
+    ],
+  };
 }
 
 /**
- * Ejecuta la conciliación de todos los gastos contra todas las facturas.
+ * Busca el subconjunto más pequeño cuyo importe sume exactamente el objetivo.
  *
- * Una factura solo puede asociarse a un movimiento (evita que la misma factura
- * justifique dos pagos distintos, que es una vía de doble contabilización).
+ * Búsqueda exhaustiva acotada por `maxSize` (4 por defecto): con los volúmenes
+ * de un mes es instantánea, y acotarla evita que el motor "encuentre" sumas
+ * casuales de siete movimientos que no significan nada.
  */
-export function reconcileExpensesWithInvoices(
+function findSubsetSummingTo(
   entries: LedgerEntry[],
-  invoices: Invoice[],
+  target: number,
+  maxSize: number,
+): LedgerEntry[] | null {
+  const pool = entries.slice(0, 40);
+
+  for (let size = 2; size <= Math.min(maxSize, pool.length); size += 1) {
+    const found = search(0, [], 0, size);
+    if (found) return found;
+  }
+  return null;
+
+  function search(
+    start: number,
+    chosen: LedgerEntry[],
+    total: number,
+    size: number,
+  ): LedgerEntry[] | null {
+    if (chosen.length === size) return total === target ? [...chosen] : null;
+    for (let i = start; i < pool.length; i += 1) {
+      const next = total + absCents(pool[i].amountCents);
+      if (next > target) continue;
+      chosen.push(pool[i]);
+      const result = search(i + 1, chosen, next, size);
+      chosen.pop();
+      if (result) return result;
+    }
+    return null;
+  }
+}
+
+/**
+ * 1 movimiento ↔ N documentos.
+ *
+ * Caso real: un pago único que liquida varias facturas del mismo proveedor.
+ * Mismas cautelas: suma exacta, ventana de fechas y emisor coherente.
+ */
+export function findMultiDocumentMatch(
+  entry: LedgerEntry,
+  documents: SupportingDocument[],
   config: MatchConfig = DEFAULT_MATCH_CONFIG,
-): ReconciliationResult {
-  const usedInvoiceIds = new Set<string>();
-  const ambiguous: ReconciliationResult["ambiguous"] = [];
+): { documents: SupportingDocument[]; reasons: string[]; score: number } | null {
+  const target = absCents(entry.amountCents);
+  if (target === 0) return null;
 
-  // Se procesan primero los apuntes cuyo mejor candidato es más nítido, para
-  // que un match claro no se quede sin factura por habérsela llevado un match
-  // dudoso procesado antes.
-  const scored = entries.map((entry) => {
-    if (entry.direction !== "expense") return { entry, bestScore: -1 };
-    const outcome = matchEntryToInvoices(entry, invoices, config);
-    const bestScore = outcome.status === "matched" ? outcome.candidate.score : 0;
-    return { entry, bestScore };
-  });
-  const order = [...scored].sort((a, b) => b.bestScore - a.bestScore).map((s) => s.entry.id);
-  const positionById = new Map(order.map((id, index) => [id, index]));
-
-  const resultById = new Map<string, LedgerEntry>();
-  const sortedEntries = [...entries].sort(
-    (a, b) => (positionById.get(a.id) ?? 0) - (positionById.get(b.id) ?? 0),
+  const eligible = documents.filter(
+    (d) =>
+      d.amountCents !== null &&
+      d.amountCents > 0 &&
+      absCents(d.amountCents) < target &&
+      Math.abs(daysBetween(d.date, entry.date)) <= config.dateWindowDays &&
+      similarity(entry.rawDescription, d.issuer) >= config.minIssuerSimilarity,
   );
 
-  for (const entry of sortedEntries) {
-    if (entry.direction !== "expense") {
-      resultById.set(entry.id, entry);
-      continue;
-    }
+  if (eligible.length < 2) return null;
 
-    const available = invoices.filter((i) => !usedInvoiceIds.has(i.id));
-    const outcome = matchEntryToInvoices(entry, available, config);
-
-    if (outcome.status === "matched") {
-      usedInvoiceIds.add(outcome.candidate.invoice.id);
-      resultById.set(entry.id, {
-        ...entry,
-        reconciliation: "matched",
-        documents: [...entry.documents, outcome.candidate.invoice.document],
-        notes: [...(entry.notes ?? []), `Factura asociada: ${outcome.candidate.reasons.join(", ")}.`],
-      });
-      continue;
-    }
-
-    if (outcome.status === "ambiguous") {
-      ambiguous.push({ entry, candidates: outcome.candidates });
-      resultById.set(entry.id, {
-        ...entry,
-        reconciliation: "ambiguous",
-        reviewStatus: "needs_review",
-        notes: [
-          ...(entry.notes ?? []),
-          `${outcome.candidates.length} facturas posibles con el mismo importe. Sin asociar automáticamente.`,
-        ],
-      });
-      continue;
-    }
-
-    resultById.set(entry.id, {
-      ...entry,
-      reconciliation: "missing_document",
-      reviewStatus: "needs_review",
-    });
+  // Se agrupan por emisor: mezclar proveedores distintos en un mismo pago es
+  // posible, pero no es una conclusión que el motor deba sacar solo.
+  const byIssuer = new Map<string, SupportingDocument[]>();
+  for (const document of eligible) {
+    const key = document.issuer.toLowerCase();
+    byIssuer.set(key, [...(byIssuer.get(key) ?? []), document]);
   }
 
-  const resultEntries = entries.map((e) => resultById.get(e.id) ?? e);
-  const unmatchedInvoices = invoices.filter((i) => !usedInvoiceIds.has(i.id));
-
-  return { entries: resultEntries, unmatchedInvoices, ambiguous };
-}
-
-/**
- * Comprobación inversa: facturas sin movimiento localizado.
- *
- * Una factura sin pago NO se convierte en gasto (D39). Puede estar pendiente,
- * pagada en otro mes o por otra vía. Solo se reporta.
- */
-export function findInvoicesWithoutMovement(
-  invoices: Invoice[],
-  entries: LedgerEntry[],
-  config: MatchConfig = DEFAULT_MATCH_CONFIG,
-): Invoice[] {
-  const documented = new Set<string>();
-  for (const entry of entries) {
-    for (const doc of entry.documents) {
-      if (doc.name) documented.add(doc.name);
-    }
+  for (const group of byIssuer.values()) {
+    if (group.length < 2) continue;
+    const total = sumCents(group.map((d) => absCents(d.amountCents ?? 0)));
+    if (total !== target) continue;
+    return {
+      documents: group,
+      score: 0.8,
+      reasons: [`${group.length} documentos del mismo emisor suman el importe del pago`],
+    };
   }
 
-  return invoices.filter((invoice) => {
-    if (documented.has(invoice.document.name)) return false;
-    // Tampoco se reporta si existe un pago plausible aún sin asociar formalmente
-    // (por ejemplo un gasto cash con el mismo importe y fecha cercana).
-    const plausible = entries.some((entry) => {
-      if (entry.direction !== "expense") return false;
-      if (absCents(entry.amountCents) !== absCents(invoice.amountCents)) return false;
-      return Math.abs(daysBetween(invoice.date, entry.date)) <= config.dateWindowDays &&
-        similarity(entry.description, invoice.supplier) >= config.minSupplierSimilarity;
-    });
-    return !plausible;
-  });
+  return null;
 }

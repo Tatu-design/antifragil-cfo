@@ -34,11 +34,11 @@ export function logsRoot(): string {
 
 /** Subcarpetas de entrada esperadas dentro de un periodo. */
 export const INPUT_FOLDERS = [
-  "bank",
-  "expenses",
-  "income",
-  "clinic_bank",
-  "clinic_cash",
-  "cash_account",
-  "master",
+  'bank_sl',
+  'bank_sc',
+  'cash_account',
+  'clinic_bank',
+  'clinic_cash',
+  'documents',
+  'manual_close',
 ] as const;

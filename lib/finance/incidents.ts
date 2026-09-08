@@ -29,14 +29,15 @@ export interface IncidentDraft {
 }
 
 const DEFAULT_SEVERITY: Record<IncidentType, IncidentSeverity> = {
-  EXPENSE_WITHOUT_INVOICE: "warning",
-  INVOICE_WITHOUT_MOVEMENT: "warning",
-  INCOME_WITHOUT_INVOICE: "warning",
-  CARD_SETTLEMENT_MISMATCH: "error",
-  AMBIGUOUS_MATCH: "warning",
-  DUPLICATE_SUSPECT: "warning",
-  FORMULA_ERROR: "error",
-  SOURCE_ERROR: "error",
+  MOVEMENT_WITHOUT_DOCUMENT: 'warning',
+  DOCUMENT_WITHOUT_MOVEMENT: 'warning',
+  INCOME_WITHOUT_DOCUMENT: 'warning',
+  CARD_SETTLEMENT_MISMATCH: 'error',
+  AMBIGUOUS_MATCH: 'warning',
+  DUPLICATE_SUSPECT: 'warning',
+  UNCLASSIFIED_MOVEMENT: 'info',
+  FORMULA_ERROR: 'error',
+  SOURCE_ERROR: 'error',
 };
 
 export function createIncident(draft: IncidentDraft): Incident {

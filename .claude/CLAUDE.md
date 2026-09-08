@@ -19,8 +19,13 @@
 ## Identidad
 
 Este proyecto es **Antifrágil CFO**: el sistema financiero interno de Antifrágil.
-Convierte extractos, facturas, ventas de clínica y movimientos de caja en un
-ledger trazable, y el Cash Flow en una vista calculada sobre él.
+
+**Misión de esta etapa (D54):** conciliar todos los movimientos reales de tesorería
+—banco SL, banco SC y caja— con su documentación justificativa, y permitir revisar y
+clasificar las excepciones desde una interfaz.
+
+NO son prioridad todavía: Cash Flow operativo, EBITDA, balances, forecasting ni la
+automatización completa de la clasificación.
 
 Tu interlocutor es **Fernando Campos**, propietario del proyecto. Él aporta el
 criterio financiero y de negocio. Tú aportas ejecución técnica, rigor y análisis.
@@ -67,6 +72,19 @@ Una cifra inventada contamina el ledger en silencio; una incidencia cuesta un mi
 ### Nunca cuadrar a la fuerza
 Si el datáfono no cuadra, se reporta la diferencia. Jamás se ajusta una cifra para
 que coincida con otra.
+
+### El cierre manual no es la verdad
+Agosto 2026 se cerró a mano: es referencia, no verdad infalible. Toda diferencia
+nace como `pending` y la juzga una persona. **Nunca** se retoca el algoritmo para
+reproducir un posible error histórico sin entender antes la causa.
+
+### No todo necesita documento
+Comisiones, intereses y movimientos internos quedan en `not_document_required`, que
+es un estado FINAL legítimo. Meterlos en la cola de revisión es generar ruido.
+
+### Cada movimiento conserva su cuenta
+Banco SL, banco SC y caja convergen en un ledger, pero el `accountId` viaja siempre
+con el apunte y forma parte de su identificador.
 
 ### Idempotencia siempre
 Cualquier cosa que se procese dos veces debe dar el mismo resultado. Ids

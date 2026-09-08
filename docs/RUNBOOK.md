@@ -1,6 +1,7 @@
 # Runbook — operación mensual
 
-Guía práctica. Qué archivos dejar, dónde, y qué comando ejecutar.
+Qué archivos dejar, dónde, y qué ejecutar. La misión de cada mes es **conciliar los
+movimientos con su documentación y revisar las excepciones**.
 
 ---
 
@@ -15,8 +16,8 @@ cp .env.example .env.local     # rellenar cuando exista el proyecto Supabase
 Comprobar que todo está sano:
 
 ```bash
-npm run check        # typecheck + lint + tests
-npm run cfo -- demo  # el motor sobre datos sintéticos, sin tocar nada real
+npm run check         # typecheck + lint + tests
+npm run cfo -- demo   # el motor sobre datos sintéticos, sin tocar nada real
 ```
 
 ---
@@ -24,23 +25,25 @@ npm run cfo -- demo  # el motor sobre datos sintéticos, sin tocar nada real
 ## Dónde va cada documento
 
 Todo lo real vive en `local-data/`, que **nunca** se sube a GitHub.
+Si las carpetas no existen, `npm run cfo -- inspect <periodo>` las crea.
 
 ```text
-local-data/inputs/2026-08/
-├── bank/           Extracto bancario del mes            (.xlsx / .csv)
-├── expenses/       Facturas de gastos                   (.pdf y/o índice .xlsx/.csv)
-├── income/         Documentos justificativos de ingresos
-├── clinic_bank/    Ventas de clínica cobradas por banco/datáfono   (.xlsx)
-├── clinic_cash/    Ventas de clínica cobradas en efectivo          (.xlsx)
-├── cash_account/   Cuenta de cash Antifrágil (pestaña del mes)     (.xlsx)
-└── master/         Cash Flow GEA 2026, como referencia histórica   (.xlsx)
+local-data/inputs/2026-09/
+├── bank_sl/        Extracto de la cuenta de la SL            (.xlsx / .csv)
+├── bank_sc/        Extracto de la cuenta de la SC            (.xlsx / .csv)
+├── cash_account/   Cuenta de cash Antifrágil                 (.xlsx)
+├── clinic_bank/    Ventas de clínica cobradas por datáfono   (.xlsx)
+├── clinic_cash/    Ventas de clínica cobradas en efectivo    (.xlsx)
+├── documents/      Documentos justificativos (mientras Drive no esté conectado)
+└── manual_close/   Cierre manual previo del mes, solo para comparar
 ```
 
 Reglas prácticas:
 
-- **La carpeta manda** sobre el nombre del archivo para decidir el tipo. Si un archivo está suelto en la raíz del periodo, se intenta deducir por el nombre (`extracto`, `ventas clínica banco`, prefijos `G_` / `I_`) y, si no se puede, se reporta como *sin clasificar* en vez de adivinar.
-- Los Google Sheets (`Cash Flow GEA 2026`, `Cuenta de cash Antifrágil`) se descargan como **.xlsx** mientras no exista la integración con Drive.
-- Si el libro tiene pestañas mensuales, no hay que recortar nada: el motor usa la del periodo (`AGOSTO 26` ↔ `2026-08`).
+- **La carpeta determina la cuenta.** Un extracto en `bank_sl/` es de la SL. Es explícito y evita tener que reconocer IBAN o entidad.
+- En `documents/` valen tanto PDFs sueltos como un índice `.xlsx`/`.csv` con columnas de fecha, proveedor, nº y importe. Un PDF sin importe legible se indexa igual, pero solo podrá conciliarse por referencia.
+- Los Google Sheets se descargan como `.xlsx` mientras no exista la integración con Drive.
+- Si un libro tiene pestañas mensuales, no hay que recortarlo: el motor usa la del periodo.
 - Se puede cambiar la ubicación de los datos con `ANTIFRAGIL_CFO_DATA_DIR` en `.env.local`.
 
 ---
@@ -48,81 +51,102 @@ Reglas prácticas:
 ## Paso 1 · Inspeccionar (mirar sin tocar)
 
 ```bash
-npm run cfo -- inspect 2026-08
+npm run cfo -- inspect 2026-09
 ```
 
-Qué hace: descubre los archivos, los abre, y **explica cómo ha entendido cada uno**
-—qué fila es la cabecera, qué columna es el importe, cuántas filas ha leído, qué
-rango de fechas cubren y cuánto suman.
+Descubre los archivos, los abre y **explica cómo ha entendido cada uno**: qué fila es
+la cabecera, qué columna es el importe, a qué cuenta pertenece, cuántas filas ha
+leído, qué rango de fechas cubren y cuánto suman.
 
-Qué **no** hace: no clasifica, no concilia, no escribe en ningún documento.
+No clasifica, no concilia, no escribe en ningún documento.
 
-Salida: `local-data/outputs/2026-08/inspection_report.md`
+Salida: `local-data/outputs/2026-09/inspection_report.md`
 
 **Este informe hay que leerlo.** Es el momento de detectar que una columna no se
-reconoció o que un archivo se interpretó mal, antes de que ninguna cifra entre en
-el ledger. Si algo no encaja, se amplían los sinónimos de columna en
-[lib/sources/table.ts](../lib/sources/table.ts) y se vuelve a ejecutar.
+reconoció, antes de que ninguna cifra entre en el ledger. Si algo no encaja, se
+amplían los sinónimos en [lib/sources/table.ts](../lib/sources/table.ts).
 
 ---
 
-## Paso 2 · Analizar (motor completo, sin persistir)
+## Paso 2 · Analizar (motor completo)
 
 ```bash
-npm run cfo -- analyze 2026-08
+npm run cfo -- analyze 2026-09
 ```
 
-Construye el ledger, aplica todas las reglas financieras, concilia y genera:
+Construye el ledger de las tres tesorerías, concilia contra la documentación y genera:
 
 | Archivo | Contenido |
 |---------|-----------|
 | `inspection_report.md` | Cómo se han interpretado las fuentes |
-| `reconciliation_report.md` | Datáfono, gastos↔facturas, facturas sin movimiento, ingresos sin documento, movimientos internos |
+| `reconciliation_report.md` | Estado documental por cuenta, datáfono, movimientos sin documento, documentos sin movimiento, evidencia de cada match |
+| `review_queue.json` | La cola de excepciones |
 | `incidents.json` | Incidencias estructuradas |
-| `run_summary.md` | Resumen, Cash Flow del mes y estado final |
-| `ledger.json` | Todos los apuntes con su trazabilidad completa |
+| `run_summary.md` | Resumen, métricas y estado final |
+| `ledger.json` | Todos los movimientos con su trazabilidad (lo lee la interfaz) |
 
-Código de salida: `0` correcto · `2` hay incidencias de gravedad *error* (por ejemplo, datáfono descuadrado).
+Código de salida: `0` correcto · `2` hay incidencias de gravedad *error*.
 
-Ejecutarlo dos veces seguidas produce exactamente el mismo resultado: es idempotente por diseño.
-
----
-
-## Paso 3 · Revisar
-
-Por este orden:
-
-1. **`run_summary.md` → sección Estado.** Si hay errores, empezar por ahí.
-2. **Datáfono.** ¿`DIFERENCIA = 0`? Si no, la diferencia está sin tocar y a la vista. Nunca se ajusta sola.
-3. **Facturas faltantes** y **facturas sin movimiento**.
-4. **Ingresos sin documentación.**
-5. **Apuntes pendientes de clasificar.** Hoy son todos los gastos bancarios nuevos, por decisión: la categoría y el P&L los decides tú.
-6. **Sospechas de duplicado.**
+Ejecutarlo dos veces produce exactamente el mismo resultado.
 
 ---
 
-## Qué hacer con cada incidencia
+## Paso 3 · Revisar en la interfaz
 
-| Incidencia | Qué significa | Qué hacer |
-|------------|---------------|-----------|
-| `EXPENSE_WITHOUT_INVOICE` | Gasto sin factura localizada | Buscar la factura, o aceptar que no la hay |
-| `INVOICE_WITHOUT_MOVEMENT` | Factura sin pago localizado | ¿Pendiente de pago? ¿Pagada en otro mes? ¿Otra cuenta? |
-| `INCOME_WITHOUT_INVOICE` | Ingreso sin documentación | Localizar el documento |
-| `CARD_SETTLEMENT_MISMATCH` | El datáfono no cuadra | Revisar si falta una liquidación o una venta. **Nunca cuadrar a mano** |
-| `AMBIGUOUS_MATCH` | Varias facturas encajan | Elegir cuál es la correcta |
-| `DUPLICATE_SUSPECT` | Posible duplicado | Confirmar si son dos hechos reales o uno repetido |
-| `SOURCE_ERROR` | Archivo faltante, ilegible o fila fuera de periodo | Revisar la fuente |
-| `FORMULA_ERROR` | El documento de origen trae `#REF!` u otro error | Corregir en origen; no se propaga |
+```bash
+npm run dev
+```
+
+- `/` — lista de periodos analizados.
+- `/periodo/2026-09` — métricas, desglose por tesorería, **cola de revisión** y todos los movimientos con su estado documental.
+
+Orden de revisión recomendado (es el de la cola):
+
+1. **Diferencias de datáfono** — si las hay, empezar por ahí.
+2. **Movimientos sin documento** — buscar el justificante o confirmar que no existe.
+3. **Matches ambiguos** — elegir cuál es el documento correcto.
+4. **Documentos sin movimiento** — ¿pendiente de pago? ¿otro mes? ¿otra vía?
+5. **Posibles duplicados** — confirmar si son dos hechos reales o uno repetido.
+6. **Sin clasificar** — asignar categoría y P&L.
+
+> Lo que aparece como **"No requiere doc."** no es una excepción: es un estado final
+> legítimo (comisiones, intereses, traspasos internos).
+
+---
+
+## Paso 4 · Comparar con el cierre manual (solo agosto 2026)
+
+```bash
+npm run cfo -- compare 2026-08
+```
+
+Requiere el Cash Flow del mes en `local-data/inputs/2026-08/manual_close/`.
+
+Genera `comparison_report.md` con los totales de ambos lados y cada diferencia
+aislada: **solo en el motor**, **solo en el cierre manual** o **importe distinto**.
+
+**Ninguna versión se presume correcta.** Toda diferencia nace como `pending`, y hay
+que clasificarla como:
+
+| Veredicto | Cuándo |
+|-----------|--------|
+| `probable_engine_error` | El motor ha leído mal, ha duplicado o se ha dejado algo |
+| `probable_manual_error` | El cierre manual se dejó un movimiento o puso mal un importe |
+| `criteria_difference` | Ambos son defendibles: cambia el criterio (fecha, consolidación, clasificación) |
+
+> **Nunca** se retoca el algoritmo para reproducir un resultado histórico sin
+> entender antes la causa.
 
 ---
 
 ## Comprobaciones antes de dar un mes por bueno
 
-- [ ] Todos los movimientos del extracto están (ninguno perdido en silencio)
-- [ ] Los movimientos internos están marcados como tales y fuera del resultado
+- [ ] Los movimientos de las tres cuentas están, cada uno con su cuenta correcta
+- [ ] Los movimientos internos están marcados y fuera del resultado
 - [ ] El datáfono cuadra, o su diferencia está explicada
 - [ ] Las ventas cash vienen de su Excel, no de las retiradas
-- [ ] Ninguna factura sin movimiento se ha convertido en gasto
+- [ ] Cada movimiento tiene estado documental explícito
+- [ ] Ningún documento sin movimiento se ha convertido en gasto
 - [ ] No hay duplicados sin confirmar
 - [ ] Cada cifra puede rastrearse hasta archivo y fila
 - [ ] `npm run check` en verde
@@ -133,11 +157,11 @@ Por este orden:
 
 ```bash
 npm run check    # typecheck + lint + tests
-npm run build    # build de producción
+npm run build
 ```
 
-Una tarea no está terminada porque compile (D51). Si cambia una regla financiera,
-cambian a la vez la regla, su test y [FINANCIAL_RULES.md](./FINANCIAL_RULES.md).
+Si cambia una regla financiera, cambian a la vez la regla, su test y
+[FINANCIAL_RULES.md](./FINANCIAL_RULES.md).
 
 ---
 
@@ -146,11 +170,14 @@ cambian a la vez la regla, su test y [FINANCIAL_RULES.md](./FINANCIAL_RULES.md).
 **"No se ha reconocido la cabecera"** → El archivo usa nombres de columna que el
 motor no conoce. Añadir el sinónimo en `SYNONYMS` de [lib/sources/table.ts](../lib/sources/table.ts).
 
+**Un extracto suelto aparece como "sin clasificar"** → No dice a qué cuenta pertenece.
+Colocarlo en `bank_sl/` o `bank_sc/`.
+
 **Importes x1000 o divididos** → Formato numérico raro. Revisar `parseAmountToCents`
-en [lib/finance/money.ts](../lib/finance/money.ts) y añadir un test con ese formato exacto.
+en [lib/finance/money.ts](../lib/finance/money.ts) y añadir un test con ese formato.
 
-**Fechas desplazadas un día** → Serial de Excel o zona horaria. Todo el dominio usa
-cadenas ISO precisamente para evitarlo; revisar `parseDateToISO`.
+**Demasiados "sin documento"** → Puede faltar la carpeta `documents/`, o que los
+documentos no tengan importe legible. Revisar el informe de inspección.
 
-**"Movimiento fuera del periodo"** → El extracto incluye días de otro mes. Es correcto
-que no entre; se reporta para que quede constancia.
+**"Movimiento fuera del periodo"** → El extracto incluye días de otro mes. Es
+correcto que no entre; se reporta para que quede constancia.
