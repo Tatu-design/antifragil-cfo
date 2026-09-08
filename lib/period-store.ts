@@ -15,8 +15,17 @@ import { dataRoot, outputsRoot } from "./paths";
  */
 
 export async function listAnalyzedPeriods(): Promise<string[]> {
+  return listPeriodFolders("outputs");
+}
+
+/** Periodos que tienen documentos subidos, aunque todavía no se hayan procesado. */
+export async function listPeriodsWithDocuments(): Promise<string[]> {
+  return listPeriodFolders("documents");
+}
+
+async function listPeriodFolders(folder: string): Promise<string[]> {
   try {
-    const entries = await readdir(path.join(dataRoot(), "outputs"), { withFileTypes: true });
+    const entries = await readdir(path.join(dataRoot(), folder), { withFileTypes: true });
     return entries
       .filter((e) => e.isDirectory() && /^\d{4}-\d{2}$/.test(e.name))
       .map((e) => e.name)

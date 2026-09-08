@@ -31,7 +31,9 @@ Todo dato real vive en `local-data/`, excluida por `.gitignore`.
 | Interfaz operativa de revisión (lectura) | ✅ Funcionando sobre datos locales |
 | Índice documental de Drive | 🟡 Motor y tests listos; falta credencial |
 | Persistencia en Supabase | 🟡 Esquema escrito; falta aplicarlo |
-| Clasificación desde la interfaz | ⬜ Siguiente |
+| Carga de documentos por arrastre, con reconocimiento automático | ✅ Funcionando |
+| Almacenamiento privado y carga incremental | ✅ Funcionando (local; Supabase Storage listo) |
+| Clasificación desde la interfaz | ⬜ Aplazado a propósito |
 | Reconstrucción y comparación de agosto 2026 | 🟡 Motor listo; faltan los archivos reales |
 | Septiembre 2026 operativo | ⬜ Objetivo inmediato |
 
@@ -53,25 +55,26 @@ Mismo stack y convenciones que el resto de aplicaciones Antifrágil.
 ```bash
 npm install
 cp .env.example .env.local     # rellenar cuando exista el proyecto Supabase
-
-npm run check                  # typecheck + lint + tests
-npm run cfo -- demo            # el motor sobre datos sintéticos
-npm run dev                    # interfaz de revisión
+npm run dev
 ```
 
 ## Uso mensual
 
-```bash
-npm run cfo -- inspect 2026-09   # lee las fuentes y explica cómo las ha entendido
-npm run cfo -- analyze 2026-09   # construye el ledger, concilia y genera informes
-npm run cfo -- compare 2026-08   # contrasta un mes con su cierre manual previo
-```
+Todo desde la aplicación, en cuatro pasos:
 
-Después, `npm run dev` → `/periodo/2026-09` para revisar las excepciones.
+> **Seleccionar mes → arrastrar archivos → procesar → revisar**
 
-Ningún comando escribe sobre los documentos originales del negocio.
+1. Abre el mes desde la portada.
+2. Arrastra **todos los documentos de una vez** (PDF, XLSX y CSV): facturas,
+   nóminas, impuestos, extractos de la SL y la SC, cuenta de cash y hojas de
+   ventas. El sistema deduce qué es cada uno y resume la carga.
+3. Pulsa **Procesar mes**.
+4. Revisa solo las excepciones. Desde cada asiento se abre su documento.
 
-Dónde dejar cada archivo: **[docs/RUNBOOK.md](docs/RUNBOOK.md)**.
+Añadir documentos más tarde reprocesa únicamente las incidencias abiertas.
+Subir dos veces el mismo archivo no lo duplica.
+
+Guía completa: **[docs/RUNBOOK.md](docs/RUNBOOK.md)**.
 
 ---
 
@@ -114,7 +117,13 @@ Detalle completo: **[docs/FINANCIAL_RULES.md](docs/FINANCIAL_RULES.md)**.
 npm run test
 ```
 
-60 tests con datos sintéticos: multi-cuenta, documentos justificativos de varios
+84 tests con datos sintéticos: multi-cuenta, documentos justificativos de varios
 tipos, las cuatro cardinalidades de matching, datáfono (cuadra y no cuadra), cash y
 movimientos internos, cola de excepciones, métricas, idempotencia, índice de Drive,
-comparación con cierres manuales y el recorrido completo desde archivos en disco.
+comparación con cierres manuales, reconocimiento y carga de documentos, reprocesado
+incremental y el recorrido completo desde archivos en disco.
+
+## Herramientas técnicas
+
+El CLI (`npm run cfo -- ...`) se mantiene para desarrollo, depuración y tests. No
+forma parte del flujo del usuario.

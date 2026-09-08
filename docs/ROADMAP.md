@@ -1,6 +1,6 @@
 # Roadmap
 
-Estado a 8 de septiembre de 2026.
+Estado a 12 de septiembre de 2026.
 
 **Misión actual:** conciliar todos los movimientos reales de tesorería con su
 documentación y permitir revisar y clasificar las excepciones desde la interfaz.
@@ -37,31 +37,41 @@ documentación y permitir revisar y clasificar las excepciones desde la interfaz
 ### Comparación con cierres manuales
 - Motor de comparación que aísla diferencias y aporta evidencia, **sin decidir quién se equivocó**.
 
+### Carga de documentos (nuevo)
+- Zona de **arrastre masivo** en la vista del mes: decenas de archivos a la vez, PDF/XLSX/CSV.
+- **Reconocimiento automático** por nombre, MIME, prefijos G_/I_, periodo, importe y estructura tabular. Nada que etiquetar a mano.
+- Detección de cuenta SL/SC por nombre o IBAN; solo se pregunta cuando no hay certeza.
+- **Resumen de carga**: recibidos, reconocidos, a revisar, duplicados ignorados. Solo se muestra lo problemático.
+- **Idempotencia por huella de contenido**: el mismo archivo, aunque cambie de nombre, no se duplica.
+- **Carga incremental**: añadir documentos reprocesa solo las incidencias abiertas, respetando lo revisado.
+- Almacén privado intercambiable (Supabase Storage o local) y apertura del documento desde cada asiento.
+
 ### Calidad
-- **60 tests** en verde con datos sintéticos. Typecheck, lint y build limpios.
+- **84 tests** en verde con datos sintéticos. Typecheck, lint y build limpios.
 - Esquema Supabase con RLS, sin DELETE, y reglas financieras como restricciones CHECK.
 
 ---
 
 ## ⏭️ Camino más corto hasta septiembre 2026
 
-### 1. Extractos reales de las tres cuentas (bloqueante)
-Dejar en `local-data/inputs/2026-09/` los extractos de SL y SC, la cuenta de cash y
-los Excels de ventas de clínica. Ejecutar `inspect` y ajustar sinónimos de columna
-según el informe. Es lo único que hoy impide procesar un mes real.
+### 1. Archivos reales de septiembre (bloqueante)
+Abrir el mes en la aplicación y **arrastrar** los extractos de SL y SC, la cuenta de
+cash, los Excels de ventas de clínica y los justificantes. Con lo que reporte el
+procesado se ajustan los sinónimos de columna a los formatos reales. Es lo único
+que hoy impide procesar un mes de verdad.
 
-### 2. Documentos: Drive o carpeta local
-Dos vías, y la primera ya sirve para arrancar:
-- **Rápida:** dejar los documentos del mes en `documents/`.
-- **Definitiva:** credencial de Drive (O1) + `NEXT_PUBLIC` de la carpeta raíz, y sincronizar el índice.
+### 2. Documentos: ya se pueden arrastrar
+Se sueltan en la vista del mes y el sistema los reconoce. La sincronización con
+Drive (credencial O1) sustituirá esta carga manual cuando esté disponible, pero no
+la bloquea.
 
 ### 3. Persistencia en Supabase
 Crear el proyecto, aplicar la migración, dar de alta miembros y validar RLS. Upsert
 idempotente sobre los ids deterministas. `lib/period-store.ts` pasa a leer de ahí.
 
-### 4. Clasificación desde la interfaz
-Server Actions para asignar categoría y P&L, y para *"guardar esta decisión como
-regla"*. Es lo que reduce el trabajo mes a mes.
+### 4. Clasificación desde la interfaz — APLAZADO
+El modelo está preparado (categoría, P&L, reglas con trazabilidad de aprendizaje),
+pero su diseño se decidirá más adelante. No se invierte tiempo ahora.
 
 ### 5. Septiembre operativo
 Primer periodo producido íntegramente por Antifrágil CFO.

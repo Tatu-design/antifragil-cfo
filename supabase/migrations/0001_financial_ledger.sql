@@ -193,8 +193,12 @@ create index ledger_unreconciled_idx on public.ledger_entries (reconciliation)
 
 create table public.documents (
   id              uuid primary key default gen_random_uuid(),
-  -- Clave natural de la sincronización: Drive garantiza que es estable, y es
-  -- lo que hace idempotente el sync (upsert por drive_file_id).
+  -- Huella SHA-256 del contenido. Es la identidad del documento: subir dos
+  -- veces el mismo archivo, aunque cambie de nombre, no crea uno nuevo.
+  content_hash    text unique,
+  -- Ruta en el bucket privado de Supabase Storage.
+  storage_path    text,
+  -- Clave natural de la sincronización con Drive (upsert por drive_file_id).
   drive_file_id   text unique,
   period          text references public.periods (period) on delete set null,
   name            text not null,
@@ -209,6 +213,12 @@ create table public.documents (
   amount_cents    bigint,
   -- Señales usadas para deducir tipo, emisor e importe. Auditoría del indexado.
   inferred_from   text[],
+  -- Confianza del reconocimiento automático y si falta confirmación humana.
+  confidence      numeric(3, 2),
+  needs_review    boolean not null default false,
+  review_question text,
+  uploaded_by     uuid references auth.users (id),
+  uploaded_at     timestamptz,
   synced_at       timestamptz,
   modified_time   timestamptz,
   size_bytes      bigint,

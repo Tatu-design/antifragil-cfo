@@ -57,8 +57,12 @@ antifragil-cfo/
 ├── .env.example                     Plantilla de variables (sin secretos)
 │
 ├── app/                             Next.js App Router
-│   ├── page.tsx                     Portada: elegir periodo
-│   └── periodo/[period]/page.tsx    Vista operativa del mes
+│   ├── page.tsx                     Portada: elegir mes
+│   ├── periodo/[period]/            Vista operativa: carga, procesado y revisión
+│   └── api/
+│       ├── periodos/[period]/documentos     Recepción de la carga (multipart)
+│       ├── periodos/[period]/procesar       Procesar el mes
+│       └── documentos/[...ruta]             Abrir un documento (URL firmada)
 ├── proxy.ts                         Sesión Supabase + protección de rutas
 ├── next.config.ts                   Cabeceras de seguridad (CSP, HSTS…)
 │
@@ -81,6 +85,14 @@ antifragil-cfo/
 │   │   ├── review-queue.ts          Cola de excepciones
 │   │   ├── period-view.ts           Vista operativa + métricas MVP
 │   │   └── compare.ts               Motor vs cierre manual
+│   │
+│   ├── ingest/                      ⭐ Carga de documentos desde la interfaz
+│   │   ├── hash.ts                  Huella de contenido e idempotencia
+│   │   ├── recognize.ts             Reconocimiento automático de cada archivo
+│   │   ├── storage.ts               Almacén: Supabase Storage (privado) o local
+│   │   ├── registry.ts              Registro de documentos del periodo
+│   │   ├── build-period.ts          Documentos subidos → entrada del motor
+│   │   └── process-period.ts        Procesado completo o incremental
 │   │
 │   ├── drive/                       Índice documental
 │   │   ├── types.ts                 DriveClient, IndexedDocument
@@ -132,15 +144,47 @@ de columna, no se reescriben las reglas financieras.
 
 ## Interfaz operativa
 
-Hoy lee el `ledger.json` que produce `npm run cfo -- analyze`, a través de
-`lib/period-store.ts`. Cuando Supabase esté conectado, **solo cambia esa capa**: la
-interfaz consume la misma forma de datos.
+El flujo del usuario es **seleccionar mes → arrastrar archivos → procesar → revisar**.
+No necesita conocer Supabase, rutas, carpetas, CLI, hashes ni parsers.
 
-- `/` — periodos analizados.
-- `/periodo/[period]` — métricas MVP, desglose por tesorería, cola de revisión y tabla de movimientos con estado documental y enlace al documento.
+- `/` — elegir mes y ver los meses con actividad.
+- `/periodo/[period]` — zona de arrastre, resumen de carga, documentos por confirmar, botón de procesar, métricas, cola de revisión y movimientos con enlace al documento.
 
-Pendiente inmediato: poder **clasificar desde la tabla** y guardar la decisión como
-regla (Fase 8).
+### Carga de documentos
+
+```text
+navegador (lotes de 4)  →  /api/periodos/[period]/documentos
+                              ↓
+                    huella SHA-256  →  ¿duplicado?
+                              ↓
+                    reconocimiento determinista
+                              ↓
+                    almacén (Supabase Storage privado, o local)
+                              ↓
+                    registro del periodo  →  resumen visual
+```
+
+Se usa un Route Handler y no una Server Action porque el límite de cuerpo de las
+Server Actions está pensado para formularios, no para decenas de PDF. El
+navegador sube en lotes pequeños para que el progreso avance de verdad.
+
+### Procesado
+
+`processPeriod` elige el modo solo, comparando las huellas de las fuentes de
+movimientos con las del último procesado: **completo** si hay extractos nuevos,
+**incremental** si solo han llegado justificantes. El usuario no lo elige ni
+necesita saber que existe.
+
+### Almacenamiento
+
+`DocumentStorage` tiene dos implementaciones intercambiables: Supabase Storage
+(bucket **privado**, URLs firmadas de vida corta) y local. Se elige según haya
+credenciales, y el resto del código no sabe cuál está activa. Los documentos se
+nombran por su huella de contenido, así que el almacén también es idempotente.
+
+Pendiente inmediato: persistir el ledger y el registro documental en Supabase. El
+flujo de clasificación (categoría y P&L) está **deliberadamente aplazado**: el
+modelo lo soporta, pero no se diseña todavía.
 
 ---
 

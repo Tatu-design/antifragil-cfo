@@ -485,6 +485,26 @@ Claude NO debe cuestionarlas ni reabrirlas salvo instrucción explícita del pro
 | D68 | Las métricas del MVP se limitan a: ingresos, gastos, flujo neto, por tesorería, % conciliado, nº pendientes, importe pendiente de justificar, gastos por categoría y por P&L | Todo lo demás distrae de la misión actual |
 | D69 | Cash Flow operativo, EBITDA, balances y reporting avanzado se deciden **después**                                     | No condicionan la arquitectura y hoy no aportan                             |
 
+### Decisiones añadidas el 12 de septiembre de 2026 — carga de documentos
+
+| ID  | Decisión                                                                                                          | Razón                                                                  |
+| --- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| D70 | El diseño definitivo de la **clasificación** (categoría/P&L) queda APLAZADO                                        | Primero hay que hacer trivial meter la documentación                   |
+| D71 | El modelo se mantiene preparado para clasificar, pero no se invierte tiempo en un workflow complejo                | Evitar trabajo que habrá que rehacer                                   |
+| D72 | La prioridad UX es que introducir la documentación de un mes sea **extremadamente sencillo**                       | Es el cuello de botella real de la operativa                           |
+| D73 | Zona de **drag & drop** con carga masiva (decenas de archivos a la vez). Acepta PDF, XLSX y CSV                    | Subir factura por factura no es viable                                 |
+| D74 | El sistema **reconoce automáticamente** qué es cada archivo por nombre, MIME, prefijos G_/I_, periodo, importe y estructura | El usuario no debe etiquetar nada                              |
+| D75 | Sin evidencia suficiente → `needs_review`, y se resuelve después desde la interfaz                                 | Adivinar mal el tipo de un documento es peor que preguntar             |
+| D76 | Tras cada carga se muestra un **resumen**: recibidos, reconocidos, a revisar, duplicados ignorados                 | El usuario solo mira lo problemático                                   |
+| D77 | Los extractos tienen acceso propio y se asocian a SL o SC. Primero se detecta; solo se pregunta si no hay certeza  | Asignar un extracto a la cuenta equivocada contamina dos tesorerías    |
+| D78 | Los documentos reales viven en un **bucket privado de Supabase Storage**; PostgreSQL guarda metadata y hashes      | Seguridad y separación de responsabilidades                            |
+| D79 | La identidad de un documento es la **huella SHA-256 de su contenido**, no su nombre                                | Subir el mismo archivo dos veces no puede duplicarlo                   |
+| D80 | La carga es **incremental**: añadir documentos después reprocesa solo las incidencias abiertas                     | No reconstruir ni duplicar el periodo entero                           |
+| D81 | Desde cada asiento se puede **abrir el documento** asociado sin salir de la conciliación                           | Comprobar movimiento ↔ documento de un vistazo                         |
+| D82 | El usuario no debe entender Supabase, rutas, carpetas, CLI, hashes ni parsers                                      | Principio de UX del proyecto                                           |
+| D83 | El flujo operativo es: **seleccionar mes → arrastrar archivos → procesar → revisar**                               | Es toda la operativa mensual                                           |
+| D84 | El **CLI queda como herramienta técnica** de desarrollo, debugging y tests                                         | No forma parte del flujo del usuario                                   |
+
 ---
 
 ## 6. Decisiones abiertas ❓
@@ -1494,4 +1514,4 @@ El objetivo final es que el cierre financiero mensual pase de ser un trabajo man
 
 ---
 
-*Última actualización: 8 de septiembre de 2026 — reorientación a la misión de conciliación (D54-D69).*
+*Última actualización: 12 de septiembre de 2026 — carga de documentos por arrastre y almacenamiento (D70-D84).*

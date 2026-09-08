@@ -38,12 +38,57 @@ export async function readWorkbook(filePath: string): Promise<WorkbookData> {
   );
 }
 
+/**
+ * Lee un libro que ya está en memoria.
+ *
+ * Es la vía que usan los documentos subidos por la interfaz: viven en el
+ * almacén (local o Supabase Storage), no en una ruta del disco, así que llegan
+ * como bytes.
+ */
+export async function readWorkbookFromBytes(
+  bytes: Uint8Array,
+  fileName: string,
+): Promise<WorkbookData> {
+  const ext = path.extname(fileName).toLowerCase();
+
+  if (ext === ".csv") {
+    const content = new TextDecoder("utf-8").decode(bytes);
+    return {
+      file: fileName,
+      sheets: [{ name: fileName, rows: parseCsv(content, detectDelimiter(content)) }],
+    };
+  }
+
+  if (ext === ".xlsx" || ext === ".xlsm") {
+    const ExcelJS = (await import("exceljs")).default;
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(toArrayBuffer(bytes));
+    return { file: fileName, sheets: extractSheets(workbook) };
+  }
+
+  throw new Error(
+    `Formato no soportado para lectura tabular: ${ext || "(sin extensión)"} — ${fileName}`,
+  );
+}
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 async function readExcel(filePath: string): Promise<WorkbookData> {
   // Import diferido: exceljs solo se carga cuando de verdad hay un .xlsx.
   const ExcelJS = (await import("exceljs")).default;
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(filePath);
+  return { file: filePath, sheets: extractSheets(workbook) };
+}
 
+/** Convierte las hojas de un libro de ExcelJS en matrices de celdas. */
+function extractSheets(workbook: {
+  eachSheet: (callback: (worksheet: ExcelWorksheet) => void) => void;
+}): SheetData[] {
   const sheets: SheetData[] = [];
   workbook.eachSheet((worksheet) => {
     const rows: CellValue[][] = [];
@@ -58,7 +103,16 @@ async function readExcel(filePath: string): Promise<WorkbookData> {
     sheets.push({ name: worksheet.name, rows });
   });
 
-  return { file: filePath, sheets };
+  return sheets;
+}
+
+/** Forma mínima de una hoja de ExcelJS que aquí se necesita. */
+interface ExcelWorksheet {
+  name: string;
+  eachRow: (
+    options: { includeEmpty: boolean },
+    callback: (row: { cellCount: number; getCell: (col: number) => { value: unknown } }) => void,
+  ) => void;
 }
 
 /** Aplana los tipos que devuelve ExcelJS a valores simples del dominio. */

@@ -1,183 +1,167 @@
 # Runbook — operación mensual
 
-Qué archivos dejar, dónde, y qué ejecutar. La misión de cada mes es **conciliar los
-movimientos con su documentación y revisar las excepciones**.
+La operativa de un mes son cuatro pasos:
+
+> **Seleccionar mes → arrastrar archivos → procesar → revisar**
+
+No hace falta preparar carpetas, renombrar archivos, usar la terminal ni saber
+qué es un hash. Todo se hace desde la aplicación.
 
 ---
 
 ## Puesta en marcha (una sola vez)
 
 ```bash
-cd antifragil-cfo
 npm install
 cp .env.example .env.local     # rellenar cuando exista el proyecto Supabase
-```
-
-Comprobar que todo está sano:
-
-```bash
-npm run check         # typecheck + lint + tests
-npm run cfo -- demo   # el motor sobre datos sintéticos, sin tocar nada real
-```
-
----
-
-## Dónde va cada documento
-
-Todo lo real vive en `local-data/`, que **nunca** se sube a GitHub.
-Si las carpetas no existen, `npm run cfo -- inspect <periodo>` las crea.
-
-```text
-local-data/inputs/2026-09/
-├── bank_sl/        Extracto de la cuenta de la SL            (.xlsx / .csv)
-├── bank_sc/        Extracto de la cuenta de la SC            (.xlsx / .csv)
-├── cash_account/   Cuenta de cash Antifrágil                 (.xlsx)
-├── clinic_bank/    Ventas de clínica cobradas por datáfono   (.xlsx)
-├── clinic_cash/    Ventas de clínica cobradas en efectivo    (.xlsx)
-├── documents/      Documentos justificativos (mientras Drive no esté conectado)
-└── manual_close/   Cierre manual previo del mes, solo para comparar
-```
-
-Reglas prácticas:
-
-- **La carpeta determina la cuenta.** Un extracto en `bank_sl/` es de la SL. Es explícito y evita tener que reconocer IBAN o entidad.
-- En `documents/` valen tanto PDFs sueltos como un índice `.xlsx`/`.csv` con columnas de fecha, proveedor, nº y importe. Un PDF sin importe legible se indexa igual, pero solo podrá conciliarse por referencia.
-- Los Google Sheets se descargan como `.xlsx` mientras no exista la integración con Drive.
-- Si un libro tiene pestañas mensuales, no hay que recortarlo: el motor usa la del periodo.
-- Se puede cambiar la ubicación de los datos con `ANTIFRAGIL_CFO_DATA_DIR` en `.env.local`.
-
----
-
-## Paso 1 · Inspeccionar (mirar sin tocar)
-
-```bash
-npm run cfo -- inspect 2026-09
-```
-
-Descubre los archivos, los abre y **explica cómo ha entendido cada uno**: qué fila es
-la cabecera, qué columna es el importe, a qué cuenta pertenece, cuántas filas ha
-leído, qué rango de fechas cubren y cuánto suman.
-
-No clasifica, no concilia, no escribe en ningún documento.
-
-Salida: `local-data/outputs/2026-09/inspection_report.md`
-
-**Este informe hay que leerlo.** Es el momento de detectar que una columna no se
-reconoció, antes de que ninguna cifra entre en el ledger. Si algo no encaja, se
-amplían los sinónimos en [lib/sources/table.ts](../lib/sources/table.ts).
-
----
-
-## Paso 2 · Analizar (motor completo)
-
-```bash
-npm run cfo -- analyze 2026-09
-```
-
-Construye el ledger de las tres tesorerías, concilia contra la documentación y genera:
-
-| Archivo | Contenido |
-|---------|-----------|
-| `inspection_report.md` | Cómo se han interpretado las fuentes |
-| `reconciliation_report.md` | Estado documental por cuenta, datáfono, movimientos sin documento, documentos sin movimiento, evidencia de cada match |
-| `review_queue.json` | La cola de excepciones |
-| `incidents.json` | Incidencias estructuradas |
-| `run_summary.md` | Resumen, métricas y estado final |
-| `ledger.json` | Todos los movimientos con su trazabilidad (lo lee la interfaz) |
-
-Código de salida: `0` correcto · `2` hay incidencias de gravedad *error*.
-
-Ejecutarlo dos veces produce exactamente el mismo resultado.
-
----
-
-## Paso 3 · Revisar en la interfaz
-
-```bash
 npm run dev
 ```
 
-- `/` — lista de periodos analizados.
-- `/periodo/2026-09` — métricas, desglose por tesorería, **cola de revisión** y todos los movimientos con su estado documental.
-
-Orden de revisión recomendado (es el de la cola):
-
-1. **Diferencias de datáfono** — si las hay, empezar por ahí.
-2. **Movimientos sin documento** — buscar el justificante o confirmar que no existe.
-3. **Matches ambiguos** — elegir cuál es el documento correcto.
-4. **Documentos sin movimiento** — ¿pendiente de pago? ¿otro mes? ¿otra vía?
-5. **Posibles duplicados** — confirmar si son dos hechos reales o uno repetido.
-6. **Sin clasificar** — asignar categoría y P&L.
-
-> Lo que aparece como **"No requiere doc."** no es una excepción: es un estado final
-> legítimo (comisiones, intereses, traspasos internos).
+Mientras Supabase no esté configurado, los documentos se guardan en la zona
+local de trabajo (`local-data/`, excluida del repositorio). Cuando se configure,
+pasan al bucket privado de Supabase Storage sin que cambie nada de la operativa.
 
 ---
 
-## Paso 4 · Comparar con el cierre manual (solo agosto 2026)
+## Paso 1 · Seleccionar el mes
 
-```bash
-npm run cfo -- compare 2026-08
+En la portada, elige el mes y pulsa **Abrir mes**. Un periodo no hay que crearlo:
+se abre y ya se le pueden arrastrar documentos.
+
+---
+
+## Paso 2 · Arrastrar los documentos
+
+Arrastra a la zona grande **todos los documentos del mes de una vez**: 20, 40 o
+100. Vale también pulsar y seleccionarlos.
+
+Se aceptan **PDF, XLSX y CSV**:
+
+- facturas, nóminas, impuestos, recibos de Seguridad Social, justificantes;
+- extractos de la SL y de la SC;
+- la Cuenta de cash Antifrágil;
+- las hojas de ventas de clínica (banco y efectivo).
+
+El sistema deduce qué es cada archivo por el nombre, la extensión, los prefijos
+`G_`/`I_`, el periodo y el importe que aparezcan en el nombre, y la estructura de
+las tablas. **No hay que etiquetar nada.**
+
+Al terminar aparece el resumen:
+
+```text
+37 documentos recibidos · 34 reconocidos · 2 necesitan revisión · 1 duplicado ignorado
 ```
 
-Requiere el Cash Flow del mes en `local-data/inputs/2026-08/manual_close/`.
+Y debajo, **solo lo problemático**. Los duplicados no molestan: subir dos veces
+el mismo archivo no lo duplica, aunque llegue con otro nombre.
 
-Genera `comparison_report.md` con los totales de ambos lados y cada diferencia
-aislada: **solo en el motor**, **solo en el cierre manual** o **importe distinto**.
+### Extractos
 
-**Ninguna versión se presume correcta.** Toda diferencia nace como `pending`, y hay
-que clasificarla como:
+Se reconocen desde la misma zona. Si el archivo indica la entidad (SL o SC) o
+lleva el IBAN dentro, la cuenta se asigna sola. Si no, aparece en **Documentos
+por confirmar** con dos botones: *Es de la SL* / *Es de la SC*.
 
-| Veredicto | Cuándo |
-|-----------|--------|
-| `probable_engine_error` | El motor ha leído mal, ha duplicado o se ha dejado algo |
-| `probable_manual_error` | El cierre manual se dejó un movimiento o puso mal un importe |
-| `criteria_difference` | Ambos son defendibles: cambia el criterio (fecha, consolidación, clasificación) |
+> Para que el IBAN se reconozca, configura `ANTIFRAGIL_IBAN_SL_TAIL` y
+> `ANTIFRAGIL_IBAN_SC_TAIL` en `.env.local` con los últimos 4 dígitos de cada
+> cuenta. No se guardan datos bancarios en el repositorio.
 
-> **Nunca** se retoca el algoritmo para reproducir un resultado histórico sin
-> entender antes la causa.
+También existe el desplegable **Añadir extractos**, útil si prefieres indicar la
+cuenta por adelantado.
+
+---
+
+## Paso 3 · Procesar
+
+Pulsa **Procesar mes**. El sistema decide solo qué hacer:
+
+- **Primera vez o extracto nuevo** → construye el mes completo.
+- **Solo han llegado justificantes** → reintenta **únicamente** las incidencias
+  abiertas, sin tocar lo ya conciliado ni lo que tú hayas revisado.
+
+Después te dice qué ha hecho: movimientos, porcentaje conciliado y qué se ha
+resuelto.
+
+---
+
+## Paso 4 · Revisar
+
+Orden de revisión (es el de la cola):
+
+1. **Diferencias de datáfono** — empezar por aquí si las hay.
+2. **Movimientos sin documento** — buscar el justificante o confirmar que no existe.
+3. **Matches ambiguos** — elegir cuál es el documento correcto.
+4. **Documentos sin movimiento** — ¿pendiente de pago? ¿otro mes? ¿otra vía?
+5. **Posibles duplicados**.
+6. **Sin clasificar** — categoría y P&L, cuyo flujo se diseñará más adelante.
+
+En la tabla de movimientos, el nombre del documento es un enlace: se abre en una
+pestaña para comprobar **movimiento ↔ documento** sin salir del flujo.
+
+> Lo que aparece como **"No requiere doc."** no es una excepción: es un estado
+> final legítimo (comisiones, intereses, traspasos internos).
+
+---
+
+## Añadir documentos más tarde
+
+Es el caso normal: septiembre queda con 5 movimientos sin justificar y mañana
+aparecen 3 facturas.
+
+1. Abre septiembre.
+2. Arrastra las 3 facturas.
+3. Pulsa **Procesar mes**.
+
+Se reintentan solo esas incidencias. Nada se reconstruye ni se duplica, y lo que
+ya habías revisado se respeta.
 
 ---
 
 ## Comprobaciones antes de dar un mes por bueno
 
 - [ ] Los movimientos de las tres cuentas están, cada uno con su cuenta correcta
+- [ ] No quedan documentos por confirmar
 - [ ] Los movimientos internos están marcados y fuera del resultado
 - [ ] El datáfono cuadra, o su diferencia está explicada
-- [ ] Las ventas cash vienen de su Excel, no de las retiradas
 - [ ] Cada movimiento tiene estado documental explícito
 - [ ] Ningún documento sin movimiento se ha convertido en gasto
 - [ ] No hay duplicados sin confirmar
-- [ ] Cada cifra puede rastrearse hasta archivo y fila
-- [ ] `npm run check` en verde
 
 ---
 
-## Antes de tocar código
+## Herramientas técnicas (no forman parte de la operativa)
+
+El CLI se mantiene para desarrollo, depuración y tests. **No hace falta usarlo.**
+
+```bash
+npm run cfo -- inspect 2026-09   # cómo se interpretan unas fuentes en carpetas locales
+npm run cfo -- analyze 2026-09   # motor completo desde carpetas locales + informes
+npm run cfo -- compare 2026-08   # contrastar un mes con su cierre manual previo
+npm run cfo -- demo              # el motor sobre datos sintéticos
+```
+
+Antes de tocar código:
 
 ```bash
 npm run check    # typecheck + lint + tests
 npm run build
 ```
 
-Si cambia una regla financiera, cambian a la vez la regla, su test y
-[FINANCIAL_RULES.md](./FINANCIAL_RULES.md).
-
 ---
 
 ## Problemas frecuentes
 
+**"Necesita revisión" en un archivo que sí sabes qué es** → El nombre no daba
+señales suficientes. Confírmalo en *Documentos por confirmar*; el archivo ya está
+guardado, no hay que volver a subirlo.
+
+**Un extracto no entra al procesar** → Le falta la cuenta. Aparece en *Documentos
+por confirmar* con los botones SL/SC.
+
 **"No se ha reconocido la cabecera"** → El archivo usa nombres de columna que el
-motor no conoce. Añadir el sinónimo en `SYNONYMS` de [lib/sources/table.ts](../lib/sources/table.ts).
+motor no conoce. Se añaden en `SYNONYMS` de [lib/sources/table.ts](../lib/sources/table.ts).
 
-**Un extracto suelto aparece como "sin clasificar"** → No dice a qué cuenta pertenece.
-Colocarlo en `bank_sl/` o `bank_sc/`.
+**Demasiados "sin documento"** → Puede que falten justificantes por subir, o que
+sus importes no sean legibles desde el nombre. Revisa la cola.
 
-**Importes x1000 o divididos** → Formato numérico raro. Revisar `parseAmountToCents`
-en [lib/finance/money.ts](../lib/finance/money.ts) y añadir un test con ese formato.
-
-**Demasiados "sin documento"** → Puede faltar la carpeta `documents/`, o que los
-documentos no tengan importe legible. Revisar el informe de inspección.
-
-**"Movimiento fuera del periodo"** → El extracto incluye días de otro mes. Es
-correcto que no entre; se reporta para que quede constancia.
+**Un archivo no admitido** → Solo PDF, XLSX y CSV. Una foto o un DOCX se rechazan
+y se indica en el resumen.
