@@ -1,17 +1,26 @@
 -- ============================================================================
--- Antifrágil CFO — Esquema inicial del Financial Ledger
+-- Antifrágil CFO — Esquema inicial
 -- ----------------------------------------------------------------------------
--- Migración 0001. Modelo central: cuentas de tesorería, periodos, movimientos,
--- índice documental de Drive, conciliaciones, incidencias, reglas y auditoría.
+-- Migración 0001. Modelo completo: control de acceso, cuentas de tesorería,
+-- periodos, cargas, documentos, movimientos, conciliaciones, incidencias,
+-- reglas de clasificación, comparaciones de cierre y auditoría.
 --
--- MISIÓN DE ESTA ETAPA: conciliar todos los movimientos reales de tesorería
--- (banco SL, banco SC y caja) con su documentación justificativa, y dejar las
--- excepciones listas para revisión desde la interfaz.
+-- MISIÓN DE ESTA ETAPA: conciliar los movimientos reales de tesorería (banco SL,
+-- banco SC y caja) con su documentación justificativa, y dejar las excepciones
+-- listas para revisión desde la interfaz.
 --
--- MODELO DE SEGURIDAD: toda la información es financiera y privada. RLS está
--- activo en todas las tablas desde el primer día. El acceso se concede a los
--- usuarios presentes en `cfo_members`. La service_role nunca se expone al
--- navegador y solo se usa desde el servidor.
+-- MODELO DE SEGURIDAD: toda la información es financiera y privada.
+--   · RLS activo en TODAS las tablas desde el primer día.
+--   · El acceso se concede por pertenencia a `cfo_members`, no por ser un
+--     usuario cualquiera de Supabase Auth. Registrarse no da acceso a nada.
+--   · Sin políticas de DELETE: los datos financieros no se borran desde la
+--     aplicación. Corregir es escribir, no hacer desaparecer el rastro.
+--   · La aplicación opera con el cliente de sesión del usuario, así que estas
+--     políticas son la barrera real, no un adorno.
+--
+-- IDEMPOTENCIA: no depende del código TypeScript. Las restricciones UNIQUE de
+-- este archivo son las que impiden duplicar documentos, movimientos,
+-- conciliaciones e incidencias al reprocesar un mes.
 -- ============================================================================
 
 create extension if not exists pgcrypto with schema extensions;
@@ -19,6 +28,13 @@ create extension if not exists pgcrypto with schema extensions;
 -- ============================================================================
 -- 1 · CONTROL DE ACCESO
 -- ============================================================================
+-- Patrón elegido: lista blanca de miembros.
+--
+-- Es lo más simple que cumple el requisito. Los datos son de la empresa, no de
+-- una persona, así que todos los miembros ven lo mismo y no hace falta
+-- `owner_user_id` ni workspaces. Un usuario nuevo de Auth NO obtiene acceso
+-- automático: hasta que alguien inserta su fila aquí, RLS le devuelve cero
+-- filas en todas partes. Añadir usuarios después no obliga a rehacer nada.
 
 create table public.cfo_members (
   user_id     uuid primary key references auth.users (id) on delete cascade,
@@ -30,8 +46,10 @@ create table public.cfo_members (
 );
 
 comment on table public.cfo_members is
-  'Lista blanca de acceso a los datos financieros. Sin fila aquí, RLS lo bloquea todo.';
+  'Lista blanca de acceso. Sin fila aquí, RLS bloquea absolutamente todo.';
 
+-- SECURITY DEFINER para poder consultar la pertenencia desde las políticas de
+-- otras tablas sin entrar en recursión con las políticas de esta.
 create or replace function public.is_cfo_member()
 returns boolean
 language sql
@@ -83,52 +101,111 @@ insert into public.treasury_accounts (id, label, kind, legal_entity) values
 -- ============================================================================
 
 create table public.periods (
-  id          uuid primary key default gen_random_uuid(),
-  period      text not null unique,
-  status      text not null default 'open',
-  opened_at   timestamptz not null default now(),
-  closed_at   timestamptz,
-  notes       text,
+  period        text primary key,
+  status        text not null default 'open',
+  -- Huellas de las fuentes de movimientos del último procesado. Es lo que
+  -- permite decidir si la siguiente pasada puede ser incremental.
+  source_hashes text[] not null default '{}',
+  opened_at     timestamptz not null default now(),
+  processed_at  timestamptz,
+  closed_at     timestamptz,
+  notes         text,
 
-  constraint periods_period_format check (period ~ '^\d{4}-(0[1-9]|1[0-2])$'),
+  constraint periods_format check (period ~ '^\d{4}-(0[1-9]|1[0-2])$'),
   constraint periods_status_check check (status in ('open', 'processing', 'review', 'closed'))
 );
 
 -- ============================================================================
--- 4 · IMPORTACIONES
+-- 4 · CARGAS DE DOCUMENTOS
 -- ============================================================================
--- Cada lectura de fuentes queda registrada: permite responder "¿de dónde salió
--- esta cifra y cuándo entró?".
+-- Traza de cada lote arrastrado a la interfaz: quién subió qué y cuándo.
 
-create table public.imports (
-  id            uuid primary key default gen_random_uuid(),
-  period        text not null references public.periods (period) on delete restrict,
-  account_id    text references public.treasury_accounts (id),
-  source_kind   text not null,
-  file_name     text not null,
-  -- Hash del contenido: reimportar el mismo archivo se detecta al instante.
-  content_hash  text not null,
-  status        text not null default 'uploaded',
-  row_count     integer,
-  imported_by   uuid references auth.users (id),
-  created_at    timestamptz not null default now(),
-  finished_at   timestamptz,
-  error         text,
+create table public.document_uploads (
+  id               uuid primary key default gen_random_uuid(),
+  period           text not null,
+  received_count   integer not null default 0,
+  recognized_count integer not null default 0,
+  review_count     integer not null default 0,
+  duplicate_count  integer not null default 0,
+  rejected_count   integer not null default 0,
+  uploaded_by      uuid references auth.users (id),
+  created_at       timestamptz not null default now(),
 
-  constraint imports_status_check check (status in ('uploaded', 'processing', 'processed', 'failed')),
-  constraint imports_unique_file unique (period, source_kind, content_hash)
+  constraint uploads_period_format check (period ~ '^\d{4}-(0[1-9]|1[0-2])$')
 );
 
-create index imports_period_idx on public.imports (period);
+create index document_uploads_period_idx on public.document_uploads (period);
 
 -- ============================================================================
--- 5 · LEDGER
+-- 5 · DOCUMENTOS
+-- ============================================================================
+-- Metadata de cada archivo subido. Los bytes viven en el bucket privado de
+-- Storage; aquí está todo lo demás.
+
+create table public.documents (
+  id              uuid primary key default gen_random_uuid(),
+  period          text not null,
+  -- Huella SHA-256 del contenido. Es la IDENTIDAD del documento: el mismo
+  -- archivo con otro nombre es el mismo documento.
+  content_hash    text not null,
+  -- Ruta en el bucket privado. Determinista: periodo/huella.extensión.
+  storage_path    text not null,
+  name            text not null,
+  mime_type       text,
+  size_bytes      bigint,
+  -- Qué papel juega: justificante, extracto, cuenta de cash, ventas de clínica…
+  kind            text not null default 'unknown',
+  account_id      text references public.treasury_accounts (id),
+  doc_type        text not null default 'other',
+  issuer          text,
+  reference       text,
+  doc_date        date,
+  amount_cents    bigint,
+  -- Confianza del reconocimiento automático y señales que lo justificaron.
+  confidence      numeric(3, 2) not null default 0,
+  inferred_from   text[] not null default '{}',
+  -- Pendiente de que una persona confirme algo (qué es, o de qué cuenta).
+  needs_review    boolean not null default false,
+  review_question text,
+  -- Reservado para la integración con Drive, aplazada.
+  drive_file_id   text unique,
+  uploaded_by     uuid references auth.users (id),
+  uploaded_at     timestamptz not null default now(),
+  created_at      timestamptz not null default now(),
+
+  -- ⭐ La regla que hace idempotente la carga: subir dos veces el mismo archivo
+  -- al mismo periodo no puede crear dos documentos.
+  constraint documents_unique_per_period unique (period, content_hash),
+  constraint documents_hash_format check (content_hash ~ '^[0-9a-f]{64}$'),
+  constraint documents_period_format check (period ~ '^\d{4}-(0[1-9]|1[0-2])$'),
+  constraint documents_kind_check check (kind in (
+    'supporting_document', 'bank_statement', 'cash_account',
+    'clinic_bank_sales', 'clinic_cash_sales', 'manual', 'unknown'
+  )),
+  constraint documents_type_check check (doc_type in (
+    'invoice', 'payroll', 'tax', 'social_security', 'receipt',
+    'sales_sheet', 'bank_statement', 'contract', 'other'
+  )),
+  constraint documents_confidence_check check (confidence >= 0 and confidence <= 1),
+  -- Un extracto sin cuenta es precisamente lo que hay que preguntar: se admite,
+  -- pero entonces tiene que estar marcado para revisión.
+  constraint documents_statement_needs_account
+    check (kind <> 'bank_statement' or account_id is not null or needs_review)
+);
+
+create index documents_period_idx on public.documents (period);
+create index documents_kind_idx on public.documents (period, kind);
+create index documents_review_idx on public.documents (needs_review) where needs_review;
+
+-- ============================================================================
+-- 6 · LEDGER
 -- ============================================================================
 
 create table public.ledger_entries (
-  -- Id determinista calculado por el motor (ver lib/finance/dedupe.ts).
-  -- Es texto, no uuid, para que sea reproducible: reprocesar el mes produce el
-  -- mismo id y el upsert no duplica nada.
+  -- Id determinista calculado por el motor (ver lib/finance/dedupe.ts):
+  -- fuente + periodo + cuenta + fecha + importe + concepto + ordinal.
+  -- Es texto y no uuid precisamente para que reprocesar produzca el MISMO id y
+  -- el upsert actualice en lugar de duplicar.
   id                      text primary key,
   period                  text not null references public.periods (period) on delete restrict,
   account_id              text not null references public.treasury_accounts (id),
@@ -156,7 +233,6 @@ create table public.ledger_entries (
   -- Ids de los movimientos consolidados en este apunte (caso datáfono).
   aggregates              text[],
   notes                   text[],
-  import_id               uuid references public.imports (id) on delete set null,
   created_at              timestamptz not null default now(),
   updated_at              timestamptz not null default now(),
 
@@ -168,8 +244,8 @@ create table public.ledger_entries (
     check (reconciliation in ('pending', 'reconciled', 'missing_document', 'ambiguous', 'not_document_required')),
   constraint ledger_review_check
     check (review_status in ('imported', 'needs_review', 'reviewed', 'approved')),
-  -- Un movimiento interno no puede llevar clasificación de P&L: la regla de
-  -- negocio escrita en la base de datos, no solo en el código.
+  -- Regla de negocio escrita en la base de datos, no solo en el código: un
+  -- movimiento interno de tesorería nunca lleva clasificación de P&L.
   constraint ledger_internal_has_no_pnl
     check (direction <> 'internal' or (category is null and pnl is null)),
   -- Si no requiere documento, hay que decir por qué.
@@ -179,98 +255,49 @@ create table public.ledger_entries (
 
 create index ledger_period_idx on public.ledger_entries (period);
 create index ledger_account_idx on public.ledger_entries (account_id, entry_date);
-create index ledger_date_idx on public.ledger_entries (entry_date);
 create index ledger_review_idx on public.ledger_entries (review_status) where review_status = 'needs_review';
-create index ledger_pending_idx on public.ledger_entries (classification_status) where classification_status = 'pending';
 create index ledger_unreconciled_idx on public.ledger_entries (reconciliation)
   where reconciliation in ('missing_document', 'ambiguous');
 
 -- ============================================================================
--- 6 · ÍNDICE DOCUMENTAL (Drive)
+-- 7 · CONCILIACIONES
 -- ============================================================================
--- Drive sigue siendo el repositorio de los archivos. Aquí viven metadatos y
--- enlaces, no copias. El motor consulta este índice; nunca recorre Drive.
+-- Relación N:M con evidencia. Soporta las cuatro cardinalidades del motor:
+-- 1↔1, 1↔N, N↔1 y agregado de periodo (datáfono).
 
-create table public.documents (
-  id              uuid primary key default gen_random_uuid(),
-  -- Huella SHA-256 del contenido. Es la identidad del documento: subir dos
-  -- veces el mismo archivo, aunque cambie de nombre, no crea uno nuevo.
-  content_hash    text unique,
-  -- Ruta en el bucket privado de Supabase Storage.
-  storage_path    text,
-  -- Clave natural de la sincronización con Drive (upsert por drive_file_id).
-  drive_file_id   text unique,
-  period          text references public.periods (period) on delete set null,
-  name            text not null,
-  url             text,
-  mime_type       text,
-  folder_path     text,
-  local_path      text,
-  doc_type        text not null default 'other',
-  issuer          text,
-  reference       text,
-  doc_date        date,
-  amount_cents    bigint,
-  -- Señales usadas para deducir tipo, emisor e importe. Auditoría del indexado.
-  inferred_from   text[],
-  -- Confianza del reconocimiento automático y si falta confirmación humana.
-  confidence      numeric(3, 2),
-  needs_review    boolean not null default false,
-  review_question text,
-  uploaded_by     uuid references auth.users (id),
-  uploaded_at     timestamptz,
-  synced_at       timestamptz,
-  modified_time   timestamptz,
-  size_bytes      bigint,
-  created_at      timestamptz not null default now(),
-
-  constraint documents_type_check check (doc_type in (
-    'invoice', 'payroll', 'tax', 'social_security', 'receipt',
-    'sales_sheet', 'bank_statement', 'contract', 'other'
-  ))
-);
-
-create index documents_period_idx on public.documents (period);
-create index documents_type_idx on public.documents (doc_type);
-
--- Registro de cada sincronización con Drive.
-create table public.drive_syncs (
-  id              uuid primary key default gen_random_uuid(),
-  period          text not null,
-  root_folder_id  text not null,
-  document_count  integer not null default 0,
-  folder_count    integer not null default 0,
-  problems        text[],
-  started_at      timestamptz not null default now(),
-  finished_at     timestamptz,
-  triggered_by    uuid references auth.users (id)
-);
-
--- Relación N:M con evidencia: un movimiento puede tener varios documentos y un
--- documento puede justificar varios movimientos (nómina pagada en dos cargos).
 create table public.entry_documents (
-  entry_id     text not null references public.ledger_entries (id) on delete cascade,
-  document_id  uuid not null references public.documents (id) on delete cascade,
-  -- Cómo se estableció la relación. Auditar un match automático meses después.
-  match_method text not null default 'manual',
-  match_score  numeric(4, 3),
+  entry_id      text not null references public.ledger_entries (id) on delete cascade,
+  period        text not null,
+  document_hash text not null,
+  -- Cómo se estableció la asociación, para poder auditarla meses después.
+  match_method  text not null default 'manual',
+  match_score   numeric(4, 3),
   match_reasons text[],
   -- Agrupa los movimientos o documentos que forman una misma conciliación.
-  group_id     text,
-  created_at   timestamptz not null default now(),
-  created_by   uuid references auth.users (id),
+  group_id      text,
+  created_at    timestamptz not null default now(),
+  created_by    uuid references auth.users (id),
 
-  primary key (entry_id, document_id),
+  -- Una nueva ejecución no puede generar asociaciones duplicadas.
+  primary key (entry_id, document_hash),
+  -- El documento tiene que existir en ese mismo periodo.
+  constraint entry_documents_document_fk
+    foreign key (period, document_hash)
+    references public.documents (period, content_hash) on delete cascade,
   constraint entry_documents_method_check check (match_method in (
     'amount_date_issuer', 'reference_in_concept', 'aggregate_sum', 'aggregate_period', 'manual'
-  ))
+  )),
+  constraint entry_documents_score_check
+    check (match_score is null or (match_score >= 0 and match_score <= 1))
 );
 
-create index entry_documents_document_idx on public.entry_documents (document_id);
+create index entry_documents_document_idx on public.entry_documents (period, document_hash);
 
 -- ============================================================================
--- 7 · INCIDENCIAS
+-- 8 · INCIDENCIAS
 -- ============================================================================
+-- El id lo calcula el motor de forma determinista: reprocesar el mismo mes NO
+-- crea copias de la misma incidencia.
 
 create table public.incidents (
   id           text primary key,
@@ -305,10 +332,10 @@ create table public.incidents (
 );
 
 create index incidents_period_idx on public.incidents (period);
-create index incidents_open_idx on public.incidents (status) where status = 'open';
+create index incidents_open_idx on public.incidents (period, status) where status = 'open';
 
 -- ============================================================================
--- 8 · CONCILIACIÓN DEL DATÁFONO
+-- 9 · CONCILIACIÓN DEL DATÁFONO
 -- ============================================================================
 -- Una fila por periodo: el contraste agregado banco vs facturación.
 
@@ -324,28 +351,28 @@ create table public.card_settlements (
 );
 
 -- ============================================================================
--- 9 · REGLAS DE CLASIFICACIÓN
+-- 10 · REGLAS DE CLASIFICACIÓN
 -- ============================================================================
--- Deterministas y auditables. Una corrección manual puede convertirse en regla
--- desde la interfaz ("guardar esta decisión para futuros movimientos"), y toda
--- regla explica por qué existe.
+-- El modelo queda preparado, pero el workflow de clasificación está APLAZADO
+-- por decisión de producto. La tabla arranca vacía a propósito.
 
 create table public.classification_rules (
-  id            text primary key,
-  contains      text[] not null,
-  excludes      text[] not null default '{}',
-  account_id    text references public.treasury_accounts (id),
-  applies_to    text not null default 'both',
-  category      text not null,
-  pnl           text not null,
-  confidence    numeric(3, 2) not null default 1.00,
-  enabled       boolean not null default true,
-  note          text not null,
-  -- Movimiento a partir del cual se creó la regla. Trazabilidad del aprendizaje.
+  id                    text primary key,
+  contains              text[] not null,
+  excludes              text[] not null default '{}',
+  account_id            text references public.treasury_accounts (id),
+  applies_to            text not null default 'both',
+  category              text not null,
+  pnl                   text not null,
+  confidence            numeric(3, 2) not null default 1.00,
+  enabled               boolean not null default true,
+  -- Obligatoria: una regla sin motivo escrito no es auditable.
+  note                  text not null,
+  -- De qué movimiento se aprendió, cuando nazca de una corrección manual.
   learned_from_entry_id text,
-  created_by    uuid references auth.users (id),
-  created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now(),
+  created_by            uuid references auth.users (id),
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now(),
 
   constraint rules_applies_check check (applies_to in ('expense', 'income', 'both')),
   constraint rules_confidence_check check (confidence >= 0 and confidence <= 1),
@@ -353,27 +380,27 @@ create table public.classification_rules (
 );
 
 -- ============================================================================
--- 10 · COMPARACIÓN CON CIERRES MANUALES
+-- 11 · COMPARACIÓN CON CIERRES MANUALES
 -- ============================================================================
 -- Agosto 2026 se cerró a mano. Es referencia, no verdad infalible: las
 -- diferencias nacen como 'pending' y las clasifica una persona.
 
 create table public.close_comparisons (
-  id               uuid primary key default gen_random_uuid(),
-  period           text not null references public.periods (period) on delete cascade,
-  kind             text not null,
-  verdict          text not null default 'pending',
-  entry_id         text references public.ledger_entries (id) on delete set null,
-  entry_date       date,
-  description      text not null,
+  id                  uuid primary key default gen_random_uuid(),
+  period              text not null references public.periods (period) on delete cascade,
+  kind                text not null,
+  verdict             text not null default 'pending',
+  entry_id            text references public.ledger_entries (id) on delete set null,
+  entry_date          date,
+  description         text not null,
   engine_amount_cents bigint,
   manual_amount_cents bigint,
-  delta_cents      bigint not null,
-  evidence         text[],
-  resolution_note  text,
-  resolved_by      uuid references auth.users (id),
-  resolved_at      timestamptz,
-  created_at       timestamptz not null default now(),
+  delta_cents         bigint not null,
+  evidence            text[],
+  resolution_note     text,
+  resolved_by         uuid references auth.users (id),
+  resolved_at         timestamptz,
+  created_at          timestamptz not null default now(),
 
   constraint comparison_kind_check check (kind in ('only_in_engine', 'only_in_manual', 'amount_mismatch')),
   constraint comparison_verdict_check check (verdict in (
@@ -384,7 +411,7 @@ create table public.close_comparisons (
 create index close_comparisons_period_idx on public.close_comparisons (period);
 
 -- ============================================================================
--- 11 · AUDITORÍA
+-- 12 · AUDITORÍA
 -- ============================================================================
 
 create table public.audit_events (
@@ -403,16 +430,15 @@ create index audit_entity_idx on public.audit_events (entity, entity_id);
 create index audit_period_idx on public.audit_events (period);
 
 -- ============================================================================
--- 12 · ROW LEVEL SECURITY
+-- 13 · ROW LEVEL SECURITY
 -- ============================================================================
 
 alter table public.cfo_members          enable row level security;
 alter table public.treasury_accounts    enable row level security;
 alter table public.periods              enable row level security;
-alter table public.imports              enable row level security;
-alter table public.ledger_entries       enable row level security;
+alter table public.document_uploads     enable row level security;
 alter table public.documents            enable row level security;
-alter table public.drive_syncs          enable row level security;
+alter table public.ledger_entries       enable row level security;
 alter table public.entry_documents      enable row level security;
 alter table public.incidents            enable row level security;
 alter table public.card_settlements     enable row level security;
@@ -420,19 +446,20 @@ alter table public.classification_rules enable row level security;
 alter table public.close_comparisons    enable row level security;
 alter table public.audit_events         enable row level security;
 
--- Cada usuario puede comprobar su propia pertenencia; la gestión de miembros es
--- una operación de servidor (service_role), nunca del cliente.
+-- Cada usuario puede comprobar su propia pertenencia. Alta y baja de miembros
+-- son operaciones de servidor (service_role), nunca del cliente.
 create policy cfo_members_self_read on public.cfo_members
   for select using (user_id = auth.uid());
 
 -- Lectura: cualquier miembro. Escritura: solo owner/editor.
+-- Sin políticas de DELETE en ninguna tabla, a propósito.
 do $$
 declare
   t text;
 begin
   foreach t in array array[
-    'treasury_accounts', 'periods', 'imports', 'ledger_entries', 'documents',
-    'drive_syncs', 'entry_documents', 'incidents', 'card_settlements',
+    'treasury_accounts', 'periods', 'document_uploads', 'documents',
+    'ledger_entries', 'entry_documents', 'incidents', 'card_settlements',
     'classification_rules', 'close_comparisons'
   ]
   loop
@@ -448,11 +475,19 @@ begin
       'create policy %I on public.%I for update using (public.can_edit_cfo()) with check (public.can_edit_cfo());',
       t || '_update', t
     );
-    -- Sin política de DELETE a propósito: los datos financieros no se borran
-    -- desde la aplicación. Corregir es escribir, no hacer desaparecer.
   end loop;
 end;
 $$;
+
+-- Excepción: el reprocesado retira las asociaciones y las incidencias abiertas
+-- que ya no aplican. Es un recálculo del motor, no un borrado de información
+-- introducida por una persona (las decisiones humanas viven en el movimiento y
+-- en `incidents.status`, que este borrado respeta).
+create policy entry_documents_delete on public.entry_documents
+  for delete using (public.can_edit_cfo());
+
+create policy incidents_delete_open on public.incidents
+  for delete using (public.can_edit_cfo() and status = 'open');
 
 -- La auditoría es de solo lectura para los miembros: la escriben los procesos
 -- de servidor. Nadie puede reescribir su propio rastro.
@@ -460,7 +495,7 @@ create policy audit_events_read on public.audit_events
   for select using (public.is_cfo_member());
 
 -- ============================================================================
--- 13 · updated_at automático
+-- 14 · updated_at automático
 -- ============================================================================
 
 create or replace function public.touch_updated_at()

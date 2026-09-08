@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { guardApi } from "@/lib/auth/api";
 import { isValidPeriod } from "@/lib/finance/period";
-import { resolveDocument } from "@/lib/ingest/registry";
+import { resolveDocument } from "@/lib/repositories";
 
 /**
  * Resuelve la duda pendiente sobre un documento.
@@ -27,6 +28,9 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ period: string; hash: string }> },
 ) {
+  const guard = await guardApi({ write: true });
+  if (!guard.ok) return guard.response;
+
   const { period, hash } = await params;
   if (!isValidPeriod(period)) {
     return NextResponse.json({ error: "Periodo inválido." }, { status: 400 });

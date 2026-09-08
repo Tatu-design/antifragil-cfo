@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { guardApi } from "@/lib/auth/api";
 import { createDocumentStorage } from "@/lib/ingest/storage";
 
 /**
@@ -18,6 +19,10 @@ export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ ruta: string[] }> },
 ) {
+  // Conocer la ruta (o el hash) de un documento NO da acceso a él.
+  const guard = await guardApi();
+  if (!guard.ok) return guard.response;
+
   const { ruta } = await params;
   const storagePath = ruta.map((segment) => decodeURIComponent(segment)).join("/");
 

@@ -1,13 +1,10 @@
 import "server-only";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { buildPeriodLedger } from "../finance/ledger";
 import { reprocessPending } from "../finance/reprocess";
 import type { PeriodLedger } from "../finance/types";
-import { outputsRoot } from "../paths";
-import { loadPeriodLedger } from "../period-store";
+import { ledgerRepository, loadPeriodDocuments } from "../repositories";
 import { buildPeriodInputFromUploads, MOVEMENT_KINDS } from "./build-period";
-import { loadPeriodDocuments, type PeriodDocuments } from "./registry";
+import type { PeriodDocuments } from "./registry";
 import { createDocumentStorage } from "./storage";
 
 /**
@@ -37,18 +34,19 @@ export interface ProcessResult {
 
 export async function processPeriod(period: string): Promise<ProcessResult> {
   const storage = createDocumentStorage();
+  const repository = ledgerRepository();
   const registry = await loadPeriodDocuments(period);
   const built = await buildPeriodInputFromUploads(registry, storage);
 
-  const previous = await loadPeriodLedger(period);
+  const previous = await repository.loadLedger(period);
   const currentSources = movementSourceHashes(registry);
-  const previousSources = await loadProcessedSources(period);
+  const previousSources = await repository.loadProcessedSources(period);
   const movementSourcesChanged = !sameSources(previousSources, currentSources);
 
   if (previous && !movementSourcesChanged) {
     // Solo han llegado justificantes: se reprocesa lo pendiente y nada más.
     const result = reprocessPending(previous, built.input.documents);
-    await persist(period, result.ledger, currentSources);
+    await repository.saveLedger(period, result.ledger, currentSources);
     return {
       period,
       mode: "incremental",
@@ -60,7 +58,7 @@ export async function processPeriod(period: string): Promise<ProcessResult> {
   }
 
   const ledger = buildPeriodLedger(built.input);
-  await persist(period, ledger, currentSources);
+  await repository.saveLedger(period, ledger, currentSources);
   return {
     period,
     mode: "full",
@@ -88,34 +86,4 @@ function sameSources(previous: string[] | null, current: string[]): boolean {
   if (previous === null) return false;
   if (previous.length !== current.length) return false;
   return previous.every((hash, index) => hash === current[index]);
-}
-
-async function loadProcessedSources(period: string): Promise<string[] | null> {
-  try {
-    const content = await readFile(path.join(outputsRoot(period), 'sources.json'), 'utf8');
-    const parsed = JSON.parse(content) as { sourceHashes?: string[] };
-    return parsed.sourceHashes ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Guarda el resultado del periodo.
- *
- * Hoy escribe el ledger en la zona local, que es lo que lee la interfaz. Cuando
- * Supabase esté conectado, aquí irá el upsert idempotente sobre los ids
- * deterministas, y la interfaz leerá de la base de datos sin cambiar.
- */
-async function persist(period: string, ledger: PeriodLedger, sourceHashes: string[]): Promise<void> {
-  const dir = outputsRoot(period);
-  await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, "ledger.json"), JSON.stringify(ledger, null, 2), "utf8");
-  // Qué fuentes de movimientos produjeron este ledger: decide si la próxima
-  // pasada puede ser incremental o hay que reconstruir el mes.
-  await writeFile(
-    path.join(dir, "sources.json"),
-    JSON.stringify({ sourceHashes }, null, 2),
-    "utf8",
-  );
 }

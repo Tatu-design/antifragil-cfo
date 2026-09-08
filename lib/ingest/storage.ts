@@ -65,8 +65,8 @@ export function createLocalStorage(): DocumentStorage {
     },
 
     async signedUrl(storagePath) {
-      // En local no hay firma: la aplicación sirve el archivo por una ruta
-      // propia que comprueba la sesión antes de leerlo del disco.
+      // En local no hay firma: se sirve por una ruta propia de la aplicación,
+      // que valida sesión y pertenencia antes de leer nada del disco.
       return `/api/documentos/${encodeURIComponent(storagePath)}`;
     },
 
@@ -83,16 +83,21 @@ export function createLocalStorage(): DocumentStorage {
 /**
  * Almacén en Supabase Storage (bucket privado).
  *
- * Usa el cliente privilegiado porque la subida ocurre en el servidor tras
- * validar la sesión: el navegador nunca recibe la service_role.
+ * Usa el cliente **de sesión**, no el privilegiado: cada operación viaja como
+ * el usuario autenticado y las políticas de storage.objects deciden. Así la
+ * autorización no depende de que el código se acuerde de comprobarla, y el
+ * service_role no hace falta para la operativa normal.
+ *
+ * El guard de la ruta ya ha validado sesión y pertenencia antes de llegar aquí;
+ * esto es la segunda barrera, la que de verdad no se puede saltar.
  */
 export function createSupabaseStorage(): DocumentStorage {
   return {
     name: "supabase",
 
     async put(storagePath, bytes) {
-      const { createAdminClient } = await import("../supabase/admin");
-      const supabase = createAdminClient();
+      const { createClient } = await import("../supabase/server");
+      const supabase = await createClient();
 
       const { error } = await supabase.storage
         .from(DOCUMENTS_BUCKET)
@@ -113,8 +118,8 @@ export function createSupabaseStorage(): DocumentStorage {
     },
 
     async signedUrl(storagePath, expiresInSeconds = 300) {
-      const { createAdminClient } = await import("../supabase/admin");
-      const supabase = createAdminClient();
+      const { createClient } = await import("../supabase/server");
+      const supabase = await createClient();
       const { data, error } = await supabase.storage
         .from(DOCUMENTS_BUCKET)
         .createSignedUrl(storagePath, expiresInSeconds);
@@ -122,8 +127,8 @@ export function createSupabaseStorage(): DocumentStorage {
     },
 
     async read(storagePath) {
-      const { createAdminClient } = await import("../supabase/admin");
-      const supabase = createAdminClient();
+      const { createClient } = await import("../supabase/server");
+      const supabase = await createClient();
       const { data, error } = await supabase.storage.from(DOCUMENTS_BUCKET).download(storagePath);
       if (error || !data) return null;
       return new Uint8Array(await data.arrayBuffer());
@@ -131,10 +136,16 @@ export function createSupabaseStorage(): DocumentStorage {
   };
 }
 
-/** Elige el almacén disponible. Supabase si está configurado; local si no. */
+/**
+ * Elige el almacén disponible.
+ *
+ * Basta con las claves públicas: la operativa normal no usa service_role, así
+ * que su ausencia no debe degradar la aplicación a modo local por accidente.
+ */
 export function createDocumentStorage(): DocumentStorage {
   const configured =
-    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL) && Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
   return configured ? createSupabaseStorage() : createLocalStorage();
 }
 

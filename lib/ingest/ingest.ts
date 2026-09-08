@@ -57,6 +57,8 @@ export interface IngestSummary {
   documents: IngestedDocument[];
   /** Nombre del almacén usado, para el informe técnico. */
   storage: string;
+  /** Quién subió el lote. */
+  uploadedBy: string | null;
 }
 
 export interface IngestOptions {
@@ -69,6 +71,8 @@ export interface IngestOptions {
    * pregunta "¿este extracto es de la SL o de la SC?".
    */
   forcedAccountId?: string | null;
+  /** Usuario autenticado que realiza la carga. Queda en la trazabilidad. */
+  uploadedBy?: string | null;
 }
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -93,6 +97,7 @@ export async function ingestFiles(
     rejected: documents.filter((d) => d.outcome === "rejected").length,
     documents,
     storage: options.storage.name,
+    uploadedBy: options.uploadedBy ?? null,
   };
 }
 

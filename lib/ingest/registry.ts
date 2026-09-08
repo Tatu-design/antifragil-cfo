@@ -1,9 +1,4 @@
-import "server-only";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { SupportingDocument } from "../finance/types";
-import { dataRoot } from "../paths";
-import type { IngestedDocument, IngestSummary } from "./ingest";
 
 /**
  * Registro de los documentos de un periodo.
@@ -16,9 +11,9 @@ import type { IngestedDocument, IngestSummary } from "./ingest";
  *   - alimentar el motor de conciliación,
  *   - abrir el documento desde el asiento.
  *
- * Hoy vive en un manifiesto JSON dentro de la zona local. Cuando Supabase esté
- * conectado pasará a la tabla `documents`, con la misma forma: solo cambia este
- * archivo.
+ * Este módulo define la FORMA del registro y las funciones puras que lo
+ * transforman. Dónde se guarda (Supabase o disco local) lo decide
+ * `lib/repositories/`.
  */
 
 export interface RegisteredDocument {
@@ -39,114 +34,12 @@ export interface RegisteredDocument {
   needsReview: boolean;
   question: string | null;
   uploadedAt: string;
+  uploadedBy: string | null;
 }
 
 export interface PeriodDocuments {
   period: string;
   documents: RegisteredDocument[];
-}
-
-function manifestPath(period: string): string {
-  return path.join(dataRoot(), "documents", period, "manifest.json");
-}
-
-export async function loadPeriodDocuments(period: string): Promise<PeriodDocuments> {
-  try {
-    const content = await readFile(manifestPath(period), "utf8");
-    return JSON.parse(content) as PeriodDocuments;
-  } catch {
-    return { period, documents: [] };
-  }
-}
-
-export async function knownHashes(period: string): Promise<Set<string>> {
-  const { documents } = await loadPeriodDocuments(period);
-  return new Set(documents.map((d) => d.hash));
-}
-
-/**
- * Incorpora el resultado de una carga al registro.
- *
- * Los duplicados no se añaden: ya están. Los rechazados tampoco, porque no
- * llegaron a almacenarse.
- */
-export async function registerIngest(
-  summary: IngestSummary,
-  now: () => Date = () => new Date(),
-): Promise<PeriodDocuments> {
-  const current = await loadPeriodDocuments(summary.period);
-  const byHash = new Map(current.documents.map((d) => [d.hash, d]));
-
-  for (const document of summary.documents) {
-    if (document.outcome === "duplicate" || document.outcome === "rejected") continue;
-    if (byHash.has(document.hash)) continue;
-    byHash.set(document.hash, toRegistered(document, summary.period, now().toISOString()));
-  }
-
-  const next: PeriodDocuments = {
-    period: summary.period,
-    documents: [...byHash.values()].sort((a, b) => a.fileName.localeCompare(b.fileName)),
-  };
-
-  const target = manifestPath(summary.period);
-  await mkdir(path.dirname(target), { recursive: true });
-  await writeFile(target, JSON.stringify(next, null, 2), "utf8");
-
-  return next;
-}
-
-/** Resuelve una duda pendiente sobre un documento (cuenta o tipo). */
-export async function resolveDocument(
-  period: string,
-  hash: string,
-  resolution: { kind?: string; accountId?: string | null; docType?: string },
-): Promise<PeriodDocuments> {
-  const current = await loadPeriodDocuments(period);
-  const documents = current.documents.map((document) =>
-    document.hash === hash
-      ? {
-          ...document,
-          ...(resolution.kind ? { kind: resolution.kind } : {}),
-          ...(resolution.accountId !== undefined ? { accountId: resolution.accountId } : {}),
-          ...(resolution.docType ? { docType: resolution.docType } : {}),
-          needsReview: false,
-          question: null,
-          reasons: [...document.reasons, "confirmado manualmente"],
-          confidence: 1,
-        }
-      : document,
-  );
-
-  const next: PeriodDocuments = { period, documents };
-  const target = manifestPath(period);
-  await mkdir(path.dirname(target), { recursive: true });
-  await writeFile(target, JSON.stringify(next, null, 2), "utf8");
-  return next;
-}
-
-function toRegistered(
-  document: IngestedDocument,
-  period: string,
-  uploadedAt: string,
-): RegisteredDocument {
-  const recognition = document.recognition;
-  return {
-    hash: document.hash,
-    fileName: document.fileName,
-    mimeType: document.mimeType,
-    sizeBytes: document.sizeBytes,
-    storagePath: document.storagePath,
-    period: recognition?.period ?? period,
-    kind: recognition?.kind ?? "unknown",
-    accountId: recognition?.accountId ?? null,
-    docType: recognition?.docType ?? "other",
-    amountCents: recognition?.amountCents ?? null,
-    confidence: recognition?.confidence ?? 0,
-    reasons: recognition?.reasons ?? [],
-    needsReview: recognition?.needsReview ?? true,
-    question: recognition?.question?.message ?? null,
-    uploadedAt,
-  };
 }
 
 /**

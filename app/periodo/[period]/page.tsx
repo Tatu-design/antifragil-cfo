@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
+import { authorize } from "@/lib/auth/guard";
 import { formatCents } from "@/lib/finance/money";
 import { isValidPeriod, periodLabel } from "@/lib/finance/period";
 import { buildPeriodView } from "@/lib/finance/period-view";
 import { QUEUE_LABELS } from "@/lib/finance/review-queue";
 import type { ReconciliationStatus } from "@/lib/finance/types";
-import { loadPeriodDocuments } from "@/lib/ingest/registry";
-import { loadPeriodLedger } from "@/lib/period-store";
+import { loadPeriodDocuments, loadPeriodLedger } from "@/lib/repositories";
 import { DropZone } from "./DropZone";
 import { PendingDocuments } from "./PendingDocuments";
 import { ProcessButton } from "./ProcessButton";
@@ -35,6 +35,9 @@ export default async function PeriodPage({
 }: {
   params: Promise<{ period: string }>;
 }) {
+  const auth = await authorize();
+  if (!auth.ok) redirect("/login");
+
   const { period } = await params;
   if (!isValidPeriod(period)) notFound();
 

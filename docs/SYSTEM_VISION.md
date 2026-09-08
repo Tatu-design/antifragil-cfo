@@ -505,6 +505,23 @@ Claude NO debe cuestionarlas ni reabrirlas salvo instrucción explícita del pro
 | D83 | El flujo operativo es: **seleccionar mes → arrastrar archivos → procesar → revisar**                               | Es toda la operativa mensual                                           |
 | D84 | El **CLI queda como herramienta técnica** de desarrollo, debugging y tests                                         | No forma parte del flujo del usuario                                   |
 
+### Decisiones añadidas el 15 de septiembre de 2026 — Supabase real y seguro
+
+| ID  | Decisión | Razón |
+| --- | --- | --- |
+| D85 | **Supabase es el backend persistente real**: Auth, PostgreSQL y Storage privado | La aplicación tiene que sobrevivir a reinicios, redeploys y cambios de equipo |
+| D86 | El **disco local queda como fallback técnico** para desarrollo, tests y demo | El disco de Vercel es efímero y no se comparte entre instancias |
+| D87 | Auth mínima: **email y contraseña**, sin registro público ni invitaciones | Hoy hay un solo usuario operativo; no merece un sistema de organizaciones |
+| D88 | La autorización es por **pertenencia a `cfo_members`**, no por estar autenticado | Registrarse en el proyecto no puede dar acceso a las finanzas |
+| D89 | Se eligió lista blanca de miembros en vez de `owner_user_id` o workspaces | Los datos son de la empresa, no de una persona: todos los miembros ven lo mismo. Es el patrón más simple que cumple el requisito y admite más usuarios sin rehacer la seguridad |
+| D90 | **Toda** operación financiera valida sesión en servidor antes de tocar nada | La interfaz no es una barrera: ocultar un botón no autoriza |
+| D91 | La aplicación opera con el **cliente de sesión**, no con service_role | Así RLS es la barrera real y no depende de que el código filtre bien |
+| D92 | `service_role` se usa **solo** en `scripts/bootstrap-member.ts` | Dar de alta al primer miembro es la única tarea que RLS no permite por diseño |
+| D93 | Comportamiento **fail-closed**: sin Supabase configurado no se sirve nada | Un despliegue con variables mal puestas debe cerrarse, no abrirse |
+| D94 | El modo local exige variable explícita **y** no estar en producción | Que no se active nunca por accidente en Vercel |
+| D95 | La idempotencia se apoya en **restricciones de la base de datos**, no solo en el código | UNIQUE (period, content_hash), PK determinista del ledger y de las incidencias |
+| D96 | Sin políticas de DELETE, salvo el recálculo del motor (asociaciones e incidencias abiertas) | Corregir es escribir; el rastro no desaparece |
+
 ---
 
 ## 6. Decisiones abiertas ❓
@@ -1514,4 +1531,4 @@ El objetivo final es que el cierre financiero mensual pase de ser un trabajo man
 
 ---
 
-*Última actualización: 12 de septiembre de 2026 — carga de documentos por arrastre y almacenamiento (D70-D84).*
+*Última actualización: 15 de septiembre de 2026 — Supabase real y seguro: Auth, RLS, Storage privado y persistencia (D85-D96).*

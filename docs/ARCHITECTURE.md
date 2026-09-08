@@ -57,6 +57,7 @@ antifragil-cfo/
 ├── .env.example                     Plantilla de variables (sin secretos)
 │
 ├── app/                             Next.js App Router
+│   ├── login/                       Entrada: email y contraseña
 │   ├── page.tsx                     Portada: elegir mes
 │   ├── periodo/[period]/            Vista operativa: carga, procesado y revisión
 │   └── api/
@@ -105,9 +106,18 @@ antifragil-cfo/
 │   │   ├── discover.ts              Descubrimiento y deducción de cuenta
 │   │   └── adapters.ts              Filas leídas → entrada del motor
 │   │
+│   ├── auth/                        ⭐ Autorización server-side
+│   │   ├── guard.ts                 authorize(): sesión + pertenencia
+│   │   └── api.ts                   guardApi(): guarda de Route Handlers
+│   │
+│   ├── repositories/                ⭐ Persistencia
+│   │   ├── types.ts                 Contratos de documentos y ledger
+│   │   ├── supabase.ts              PostgreSQL (fuente de verdad)
+│   │   ├── local.ts                 Disco local (desarrollo y tests)
+│   │   └── index.ts                 Elige backend y expone la fachada
+│   │
 │   ├── inspect/                     Fase INSPECT e informes de auditoría
 │   ├── supabase/                    client · server · admin (service role)
-│   ├── period-store.ts              Lectura de periodos analizados (server-only)
 │   └── paths.ts                     Rutas de la zona local de datos
 │
 ├── scripts/cfo.ts                   CLI: inspect · analyze · compare · demo
@@ -133,8 +143,8 @@ antifragil-cfo/
 6. CONCILIAR    reconciliation.ts  Movimiento ↔ documento, 4 cardinalidades
 7. PRIORIZAR    review-queue.ts    Excepciones ordenadas por gravedad
 8. PRESENTAR    period-view.ts     Vista operativa + métricas del MVP
-                app/               Interfaz de revisión
-                                   (9. PERSISTIR en Supabase — siguiente fase)
+9. PERSISTIR    repositories/      Upsert idempotente en PostgreSQL
+                app/               Interfaz de revisión (siempre autorizada)
 ```
 
 El paso 3 es el que habrá que afinar con los documentos reales: se amplían sinónimos
@@ -188,11 +198,31 @@ modelo lo soporta, pero no se diseña todavía.
 
 ---
 
+## Persistencia
+
+**Supabase es la fuente de verdad.** PostgreSQL guarda periodos, documentos,
+movimientos, conciliaciones, incidencias y auditoría; Storage guarda los archivos
+en un bucket privado. El estado sobrevive a reinicios, redeploys y cambios de
+navegador o de equipo.
+
+El disco local es **fallback técnico** para desarrollo, tests y demo. No sirve en
+producción: el disco de Vercel es efímero y no se comparte entre instancias.
+
+`lib/repositories/index.ts` elige uno u otro según haya Supabase configurado, y
+ningún otro módulo decide.
+
+---
+
 ## Seguridad
 
-- **RLS activo en todas las tablas** desde la primera migración. Sin fila en `cfo_members`, un usuario autenticado no ve nada.
-- **Sin políticas de DELETE**: los datos financieros no se borran desde la aplicación.
-- **`service_role` y credenciales de Drive solo en servidor**: `lib/supabase/admin.ts`, `lib/drive/client.ts` y `lib/period-store.ts` importan `server-only`, así que el build falla si alguien los arrastra al cliente.
+Detalle completo, incluida la auditoría del 15 de septiembre: [SECURITY.md](./SECURITY.md).
+
+- **Cuatro capas independientes**: middleware → guard de servidor → RLS → políticas de Storage.
+- **Autorización por pertenencia** a `cfo_members`, no por estar autenticado.
+- **Fail-closed**: sin Supabase configurado no se sirve nada; el modo local exige variable explícita y no-producción.
+- **La aplicación opera con el cliente de sesión**, así que RLS es la barrera real. `service_role` se usa solo en `scripts/bootstrap-member.ts`.
+- **Sin políticas de DELETE**, salvo el recálculo del motor (asociaciones e incidencias abiertas).
+- **`server-only`** en todo módulo con credenciales: el build falla si alguien lo arrastra al cliente.
 - **Cabeceras**: CSP, X-Frame-Options DENY, nosniff, Referrer-Policy, Permissions-Policy y HSTS en producción.
 - **Ningún dato financiero real en el repositorio**: `.gitignore` bloquea `local-data/`, las extensiones de documento y los nombres de los documentos reales conocidos.
 

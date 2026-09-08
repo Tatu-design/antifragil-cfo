@@ -11,7 +11,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "cfo": "tsx scripts/cfo.ts",
-    "check": "npm run typecheck && npm run lint && npm run test"
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "cfo:member": "tsx --env-file=.env.local scripts/bootstrap-member.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

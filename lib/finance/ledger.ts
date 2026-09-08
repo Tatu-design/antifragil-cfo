@@ -615,7 +615,7 @@ function accountLabel(accounts: TreasuryAccount[], accountId: string): string {
  * Cash Flow operativo, EBITDA y balances quedan fuera a propósito: primero hay
  * que demostrar que los movimientos y su documentación son correctos.
  */
-function summarize(
+export function summarize(
   entries: LedgerEntry[],
   incidents: Incident[],
   accounts: TreasuryAccount[],

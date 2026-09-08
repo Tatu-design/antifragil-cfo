@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { guardApi, safeError } from "@/lib/auth/api";
 import { isValidPeriod } from "@/lib/finance/period";
 import { ingestFiles, summaryHeadline, type IncomingFile } from "@/lib/ingest/ingest";
-import { knownHashes, registerIngest } from "@/lib/ingest/registry";
+import { knownHashes, registerIngest } from "@/lib/repositories";
 import { createDocumentStorage } from "@/lib/ingest/storage";
 
 /**
@@ -24,6 +25,10 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ period: string }> },
 ) {
+  // Autorización ANTES de leer el cuerpo: nada se procesa sin sesión válida.
+  const guard = await guardApi({ write: true });
+  if (!guard.ok) return guard.response;
+
   const { period } = await params;
   if (!isValidPeriod(period)) {
     return NextResponse.json({ error: "Periodo inválido." }, { status: 400 });
@@ -58,9 +63,10 @@ export async function POST(
       storage: createDocumentStorage(),
       knownHashes: await knownHashes(period),
       forcedAccountId,
+      uploadedBy: guard.user.id,
     });
 
-    await registerIngest(summary);
+    await registerIngest(summary, guard.user.id);
 
     return NextResponse.json({
       headline: summaryHeadline(summary),
@@ -84,10 +90,7 @@ export async function POST(
       })),
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Error al procesar la carga." },
-      { status: 500 },
-    );
+    return safeError(error, "No se ha podido procesar la carga.");
   }
 }
 

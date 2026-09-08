@@ -1,16 +1,18 @@
 -- ============================================================================
 -- Antifrágil CFO — Almacenamiento de documentos
 -- ----------------------------------------------------------------------------
--- Migración 0002. Bucket PRIVADO para los documentos justificativos, extractos
--- y hojas de ventas que el usuario sube desde la interfaz.
+-- Migración 0002. Bucket PRIVADO para los archivos originales: facturas,
+-- nóminas, impuestos, extractos y hojas de ventas.
 --
--- PRINCIPIO: los archivos financieros nunca se sirven por URL pública. El
--- acceso pasa siempre por el servidor, que comprueba la sesión y genera una
--- URL firmada de vida corta.
+-- PRINCIPIO: los archivos financieros no se sirven nunca por URL pública. El
+-- acceso pasa siempre por el servidor, que comprueba la sesión y la pertenencia
+-- a `cfo_members` antes de firmar una URL de vida corta.
+--
+-- Conocer la ruta de un archivo (o su SHA-256) NO da acceso a él.
 -- ============================================================================
 
 -- ============================================================================
--- 1 · BUCKET
+-- 1 · BUCKET PRIVADO
 -- ============================================================================
 -- `public = false` es lo que impide que un enlace filtrado dé acceso perpetuo.
 
@@ -29,13 +31,17 @@ values (
     'application/octet-stream'
   ]
 )
-on conflict (id) do nothing;
+on conflict (id) do update
+  set public = false,
+      file_size_limit = excluded.file_size_limit,
+      allowed_mime_types = excluded.allowed_mime_types;
 
 -- ============================================================================
 -- 2 · POLÍTICAS DE ACCESO
 -- ============================================================================
--- Solo los miembros del CFO pueden leer los documentos, y solo desde una sesión
--- autenticada. La subida la hace el servidor con service_role, que salta RLS.
+-- Mismas reglas que el resto de datos financieros: solo miembros. La aplicación
+-- sube y descarga con el cliente de sesión del usuario, así que estas políticas
+-- son la barrera real y no dependen de que el código se porte bien.
 
 create policy documentos_read on storage.objects
   for select
@@ -45,35 +51,6 @@ create policy documentos_insert on storage.objects
   for insert
   with check (bucket_id = 'documentos' and public.can_edit_cfo());
 
--- Sin políticas de UPDATE ni DELETE a propósito: el nombre de cada objeto es la
+-- Sin políticas de UPDATE ni DELETE a propósito: cada objeto se nombra por la
 -- huella de su contenido, así que un documento nunca cambia. Sustituir un
 -- justificante es subir otro, no reescribir el anterior.
-
--- ============================================================================
--- 3 · REGISTRO DE CARGAS
--- ============================================================================
--- Cada lote arrastrado a la interfaz queda registrado: cuántos archivos se
--- recibieron, cuántos se reconocieron y cuántos eran duplicados. Es la
--- trazabilidad de "quién subió qué y cuándo".
-
-create table public.document_uploads (
-  id               uuid primary key default gen_random_uuid(),
-  period           text not null,
-  received_count   integer not null default 0,
-  recognized_count integer not null default 0,
-  review_count     integer not null default 0,
-  duplicate_count  integer not null default 0,
-  rejected_count   integer not null default 0,
-  uploaded_by      uuid references auth.users (id),
-  created_at       timestamptz not null default now()
-);
-
-create index document_uploads_period_idx on public.document_uploads (period);
-
-alter table public.document_uploads enable row level security;
-
-create policy document_uploads_read on public.document_uploads
-  for select using (public.is_cfo_member());
-
-create policy document_uploads_insert on public.document_uploads
-  for insert with check (public.can_edit_cfo());

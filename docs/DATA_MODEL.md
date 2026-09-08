@@ -12,25 +12,26 @@ Tipos TypeScript: [lib/finance/types.ts](../lib/finance/types.ts)
 ## Mapa
 
 ```text
-treasury_accounts (sl_bank · sc_bank · cash)
+cfo_members .................. lista blanca de acceso (base de todo el RLS)
+treasury_accounts ............ sl_bank · sc_bank · cash
         │
 periods (YYYY-MM)
    │
-   ├── imports ............... cada lectura de fuentes, con hash del archivo
+   ├── document_uploads ...... traza de cada lote arrastrado a la interfaz
+   │
+   ├── documents ............. metadata de cada archivo subido (los bytes, en Storage)
    │
    ├── ledger_entries ⭐ ...... los movimientos, cada uno con su cuenta
    │      │
-   │      └── entry_documents ──► documents (índice de Drive)
-   │             (evidencia: método, score, motivos, grupo)
+   │      └── entry_documents ──► documents
+   │             (evidencia: método, confianza, motivos, grupo)
    │
    ├── incidents ............. lo que el motor no puede decidir solo
    ├── card_settlements ...... conciliación agregada del datáfono (1 fila/mes)
    ├── close_comparisons ..... diferencias motor vs cierre manual
    └── audit_events .......... quién cambió qué y cuándo
 
-drive_syncs .................. registro de cada sincronización con Drive
-classification_rules ......... reglas deterministas de categoría y P&L
-cfo_members .................. lista blanca de acceso (base de todo el RLS)
+classification_rules ......... reglas deterministas de categoría y P&L (vacía: aplazado)
 ```
 
 ---
@@ -96,21 +97,28 @@ sha256( source_kind | period | account_id | fecha | importe | concepto_normaliza
 
 ---
 
-## `documents` — índice documental de Drive
+## `documents` — metadata de los archivos subidos
 
-Drive guarda los archivos; aquí viven **metadatos y enlaces**, no copias.
+Los bytes viven en el bucket **privado** de Storage; aquí está todo lo demás.
 
 | Campo | Notas |
 |-------|-------|
-| `drive_file_id` (único) | Clave natural del sync: Drive la garantiza estable |
+| `content_hash` | SHA-256 del contenido. Es la **identidad** del documento |
+| `storage_path` | Ruta en el bucket: `periodo/huella.extensión` |
+| `kind` | `supporting_document` · `bank_statement` · `cash_account` · `clinic_bank_sales` · `clinic_cash_sales` · `manual` · `unknown` |
 | `doc_type` | `invoice` · `payroll` · `tax` · `social_security` · `receipt` · `sales_sheet` · `bank_statement` · `contract` · `other` |
-| `folder_path` | Ruta dentro de la raíz financiera |
+| `account_id` | Cuenta del extracto, cuando aplica |
 | `issuer` · `reference` · `doc_date` · `amount_cents` | Deducidos cuando se puede; `null` si no |
-| `inferred_from` | Señales usadas para deducirlos. Auditoría del indexado |
-| `synced_at` · `modified_time` · `size_bytes` | Control de sincronización |
+| `confidence` · `inferred_from` | Confianza del reconocimiento y señales que lo justificaron |
+| `needs_review` · `review_question` | Qué falta por confirmar, si falta algo |
+| `uploaded_by` · `uploaded_at` | Quién lo subió y cuándo |
+| `drive_file_id` | Reservado para la integración con Drive, aplazada |
 
-`drive_syncs` registra cada sincronización: periodo, carpeta raíz, nº de documentos
-y carpetas, problemas y quién la lanzó.
+**`UNIQUE (period, content_hash)`**: subir dos veces el mismo archivo al mismo
+periodo no puede crear dos documentos, aunque llegue con otro nombre.
+
+Un CHECK impide que un extracto quede sin cuenta y sin marcar para revisión: o
+sabe de qué cuenta es, o está en la cola.
 
 > Si no se conoce la URL o el importe, el campo queda `null`. Nunca se inventa.
 
@@ -165,6 +173,23 @@ Diferencias entre el mes reconstruido y el cierre manual:
 - `evidence[]`, `resolution_note`, `resolved_by`
 
 El veredicto lo pone una persona. El motor nunca se autoproclama correcto.
+
+---
+
+## Dónde vive esto
+
+**PostgreSQL es la fuente de verdad.** El disco local solo se usa en desarrollo
+y tests (`lib/repositories/`). El estado sobrevive a reinicios y redeploys.
+
+Restricciones que garantizan la idempotencia sin depender del código:
+
+| Qué | Restricción |
+|-----|-------------|
+| Documentos | `UNIQUE (period, content_hash)` |
+| Movimientos | PK `id` determinista |
+| Conciliaciones | PK `(entry_id, document_hash)` + FK compuesta a `documents(period, content_hash)` |
+| Incidencias | PK `id` determinista |
+| Datáfono | PK `period` |
 
 ---
 

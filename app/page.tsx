@@ -1,6 +1,9 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { authorize } from "@/lib/auth/guard";
+import { SignOutButton } from "./SignOutButton";
 import { periodLabel } from "@/lib/finance/period";
-import { listAnalyzedPeriods, listPeriodsWithDocuments } from "@/lib/period-store";
+import { listAnalyzedPeriods, listPeriodsWithDocuments } from "@/lib/repositories";
 import { PeriodPicker } from "./PeriodPicker";
 
 /**
@@ -14,6 +17,11 @@ import { PeriodPicker } from "./PeriodPicker";
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
+  // Segunda barrera, independiente del middleware: ninguna página financiera
+  // se renderiza sin comprobar la autorización en servidor.
+  const auth = await authorize();
+  if (!auth.ok) redirect("/login");
+
   const [analyzed, withDocuments] = await Promise.all([
     listAnalyzedPeriods(),
     listPeriodsWithDocuments(),
@@ -26,7 +34,10 @@ export default async function Home() {
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center gap-8 px-6 py-16">
       <header className="space-y-2">
-        <p className="text-sm font-medium tracking-wide text-neutral-500 uppercase">Antifrágil</p>
+        <div className="flex items-start justify-between gap-4">
+          <p className="text-sm font-medium tracking-wide text-neutral-500 uppercase">Antifrágil</p>
+          <SignOutButton email={auth.user.email} isLocalDev={auth.user.isLocalDev} />
+        </div>
         <h1 className="text-3xl font-semibold tracking-tight">CFO</h1>
         <p className="text-neutral-600 dark:text-neutral-400">
           Conciliación de los movimientos de tesorería (banco SL, banco SC y caja)

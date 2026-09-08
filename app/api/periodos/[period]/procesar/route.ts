@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { guardApi, safeError } from "@/lib/auth/api";
 import { isValidPeriod } from "@/lib/finance/period";
 import { processPeriod } from "@/lib/ingest/process-period";
 
@@ -16,6 +17,9 @@ export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ period: string }> },
 ) {
+  const guard = await guardApi({ write: true });
+  if (!guard.ok) return guard.response;
+
   const { period } = await params;
   if (!isValidPeriod(period)) {
     return NextResponse.json({ error: "Periodo inválido." }, { status: 400 });
@@ -35,9 +39,6 @@ export async function POST(
       problemCount: result.problemCount,
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Error al procesar el periodo." },
-      { status: 500 },
-    );
+    return safeError(error, "No se ha podido procesar el periodo.");
   }
 }

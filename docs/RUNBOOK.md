@@ -13,13 +13,29 @@ qué es un hash. Todo se hace desde la aplicación.
 
 ```bash
 npm install
-cp .env.example .env.local     # rellenar cuando exista el proyecto Supabase
+```
+
+Después, configura Supabase siguiendo **[SUPABASE_SETUP.md](./SUPABASE_SETUP.md)**:
+crear el proyecto, aplicar las migraciones, crear tu usuario y autorizarlo.
+
+```bash
 npm run dev
 ```
 
-Mientras Supabase no esté configurado, los documentos se guardan en la zona
-local de trabajo (`local-data/`, excluida del repositorio). Cuando se configure,
-pasan al bucket privado de Supabase Storage sin que cambie nada de la operativa.
+Entra en http://localhost:3000 con tu email y contraseña.
+
+> **Sin Supabase configurado la aplicación no da acceso a nada** (fail-closed).
+> Para trabajar sin él en desarrollo, con datos sintéticos y estado en disco,
+> añade `ANTIFRAGIL_CFO_LOCAL_MODE=1` a `.env.local` y usa `npm run dev`. Ese
+> modo no funciona en producción, a propósito.
+
+---
+
+## Paso 0 · Entrar
+
+La aplicación pide email y contraseña. Si cierras sesión, ninguna página ni
+ninguna dirección de la API devuelve información: conocer una URL o el nombre de
+un archivo no da acceso.
 
 ---
 
@@ -165,3 +181,7 @@ sus importes no sean legibles desde el nombre. Revisa la cola.
 
 **Un archivo no admitido** → Solo PDF, XLSX y CSV. Una foto o un DOCX se rechazan
 y se indica en el resumen.
+
+**"No autorizado" al usar la aplicación** → Se ha cerrado la sesión. Vuelve a
+entrar. Si el mensaje persiste tras iniciar sesión, tu usuario existe pero no
+está autorizado: ejecuta `npm run cfo:member -- tu-email@ejemplo.com owner`.
