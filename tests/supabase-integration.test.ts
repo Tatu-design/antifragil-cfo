@@ -123,8 +123,12 @@ describe.skipIf(!configured)("configuración del proyecto", () => {
 
   it("el esquema está aplicado", async () => {
     const supabase = anonymousClient();
-    // Una tabla inexistente da un error distinto (42P01) al de RLS.
     const { error } = await supabase.from("ledger_entries").select("id").limit(1);
+
+    // PostgREST responde PGRST205 cuando la tabla no existe, y 42P01 es el
+    // equivalente de PostgreSQL. Con RLS activa y sin sesión, en cambio, la
+    // consulta va bien y devuelve cero filas.
+    expect(error?.code, "las migraciones no están aplicadas").not.toBe("PGRST205");
     expect(error?.code).not.toBe("42P01");
   });
 });
