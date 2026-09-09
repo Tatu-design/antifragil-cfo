@@ -86,7 +86,7 @@ export function createLocalStorage(): DocumentStorage {
  * Usa el cliente **de sesión**, no el privilegiado: cada operación viaja como
  * el usuario autenticado y las políticas de storage.objects deciden. Así la
  * autorización no depende de que el código se acuerde de comprobarla, y el
- * service_role no hace falta para la operativa normal.
+ * la Secret Key no hace falta para la operativa normal.
  *
  * El guard de la ruta ya ha validado sesión y pertenencia antes de llegar aquí;
  * esto es la segunda barrera, la que de verdad no se puede saltar.
@@ -139,13 +139,13 @@ export function createSupabaseStorage(): DocumentStorage {
 /**
  * Elige el almacén disponible.
  *
- * Basta con las claves públicas: la operativa normal no usa service_role, así
+ * Basta con la Publishable Key: la operativa normal no usa la Secret Key, así
  * que su ausencia no debe degradar la aplicación a modo local por accidente.
  */
 export function createDocumentStorage(): DocumentStorage {
   const configured =
     Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL) &&
-    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
   return configured ? createSupabaseStorage() : createLocalStorage();
 }
 

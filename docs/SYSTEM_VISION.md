@@ -515,8 +515,10 @@ Claude NO debe cuestionarlas ni reabrirlas salvo instrucción explícita del pro
 | D88 | La autorización es por **pertenencia a `cfo_members`**, no por estar autenticado | Registrarse en el proyecto no puede dar acceso a las finanzas |
 | D89 | Se eligió lista blanca de miembros en vez de `owner_user_id` o workspaces | Los datos son de la empresa, no de una persona: todos los miembros ven lo mismo. Es el patrón más simple que cumple el requisito y admite más usuarios sin rehacer la seguridad |
 | D90 | **Toda** operación financiera valida sesión en servidor antes de tocar nada | La interfaz no es una barrera: ocultar un botón no autoriza |
-| D91 | La aplicación opera con el **cliente de sesión**, no con service_role | Así RLS es la barrera real y no depende de que el código filtre bien |
-| D92 | `service_role` se usa **solo** en `scripts/bootstrap-member.ts` | Dar de alta al primer miembro es la única tarea que RLS no permite por diseño |
+| D91 | La aplicación opera con el **cliente de sesión**, no con la clave secreta | Así RLS es la barrera real y no depende de que el código filtre bien |
+| D92 | La **Secret Key** se usa **solo** en `scripts/bootstrap-member.ts` | Dar de alta al primer miembro es la única tarea que RLS no permite por diseño |
+| D97 | Se usa el **sistema moderno de API keys** de Supabase: Publishable Key (`sb_publishable_…`) y Secret Key (`sb_secret_…`) | Las claves legacy `anon` y `service_role` están siendo retiradas; un proyecto nuevo de 2026 no debe nacer con ellas |
+| D98 | **Sin compatibilidad legacy**: no se admiten `NEXT_PUBLIC_SUPABASE_ANON_KEY` ni `SUPABASE_SERVICE_ROLE_KEY` | Mantener dos sistemas de claves por comodidad duplica la superficie de error |
 | D93 | Comportamiento **fail-closed**: sin Supabase configurado no se sirve nada | Un despliegue con variables mal puestas debe cerrarse, no abrirse |
 | D94 | El modo local exige variable explícita **y** no estar en producción | Que no se active nunca por accidente en Vercel |
 | D95 | La idempotencia se apoya en **restricciones de la base de datos**, no solo en el código | UNIQUE (period, content_hash), PK determinista del ledger y de las incidencias |
@@ -1531,4 +1533,4 @@ El objetivo final es que el cierre financiero mensual pase de ser un trabajo man
 
 ---
 
-*Última actualización: 15 de septiembre de 2026 — Supabase real y seguro: Auth, RLS, Storage privado y persistencia (D85-D96).*
+*Última actualización: 16 de septiembre de 2026 — sistema moderno de API keys de Supabase (D97-D98).*

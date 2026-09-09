@@ -15,12 +15,15 @@ import { createClient } from "@supabase/supabase-js";
 import { describe, expect, it } from "vitest";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const configured = Boolean(url && anonKey);
+const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+const configured = Boolean(url && publishableKey);
 
-/** Cliente anónimo: sin sesión, como un extraño que conoce la URL del proyecto. */
+/**
+ * Cliente sin sesión: la Publishable Key sola, como un extraño que conoce la URL
+ * del proyecto y la clave pública (que es pública por diseño).
+ */
 function anonymousClient() {
-  return createClient(url!, anonKey!, {
+  return createClient(url!, publishableKey!, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 }
@@ -111,10 +114,11 @@ describe.skipIf(!configured)("Storage privado", () => {
 });
 
 describe.skipIf(!configured)("configuración del proyecto", () => {
-  it("las claves públicas no son la service_role", () => {
-    // La service_role nunca debe estar en una variable NEXT_PUBLIC_.
-    expect(anonKey).toBeTruthy();
-    expect(anonKey).not.toBe(process.env.SUPABASE_SERVICE_ROLE_KEY);
+  it("la clave pública no es la Secret Key", () => {
+    expect(publishableKey).toBeTruthy();
+    expect(publishableKey).not.toBe(process.env.SUPABASE_SECRET_KEY);
+    // Formato moderno: la pública empieza por sb_publishable_.
+    expect(publishableKey!.startsWith("sb_secret_")).toBe(false);
   });
 
   it("el esquema está aplicado", async () => {

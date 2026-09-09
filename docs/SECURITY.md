@@ -16,7 +16,7 @@ sesión. **No era cierto.** Estos fueron los hallazgos, todos corregidos:
 | 3 | No existía página de login ni flujo de sesión. El middleware redirigía a `/login`, que no existía | **Crítica** | Corregido: `/login` con Supabase Auth |
 | 4 | Sin variables de entorno, el middleware "dejaba pasar todo" (fail-open) | **Alta** | Corregido: fail-closed; el modo local exige variable explícita y no-producción |
 | 5 | Los clientes de sesión (`lib/supabase/{client,server}.ts`) estaban escritos pero no los usaba nadie | **Alta** | Corregido: son el camino normal de toda la aplicación |
-| 6 | El único uso de Supabase era Storage, y con `service_role`, saltándose RLS | **Alta** | Corregido: la operativa usa el cliente de sesión |
+| 6 | El único uso de Supabase era Storage, y con la clave privilegiada, saltándose RLS | **Alta** | Corregido: la operativa usa el cliente de sesión |
 | 7 | Todo el estado vivía en JSON en disco. En Vercel se pierde en cada redeploy | **Alta** | Corregido: PostgreSQL es la fuente de verdad |
 | 8 | Comentarios que afirmaban validaciones inexistentes | Media | Corregidos |
 
@@ -58,19 +58,39 @@ usuarios sin rehacer la seguridad.
 
 ---
 
-## Uso de `service_role`
+## API keys: sistema moderno
 
-Se usa en **un único sitio**: [scripts/bootstrap-member.ts](../scripts/bootstrap-member.ts),
-para dar de alta al primer miembro. Es la única operación que RLS no permite por
-diseño (si el cliente pudiera escribir en `cfo_members`, cualquiera se
-autorizaría a sí mismo).
+El proyecto usa el **sistema nuevo** de claves de Supabase. Las legacy (`anon` y
+`service_role`) están siendo retiradas y **no existen en este repositorio**: un
+test recorre `lib/`, `app/`, `scripts/` y `proxy.ts` para comprobarlo.
 
-Todo lo demás —subir, leer, procesar, persistir— usa el cliente de sesión, de
-forma que **RLS es la barrera real** y no depende de que el código recuerde
-filtrar. Un test comprueba que `createAdminClient` no aparece en `lib/`.
+| Clave | Variable | Dónde vive | Qué puede |
+|-------|----------|-----------|-----------|
+| **Publishable** `sb_publishable_…` | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Servidor y **navegador** | Nada por sí sola: RLS decide |
+| **Secret** `sb_secret_…` | `SUPABASE_SECRET_KEY` | **Solo servidor** | Salta RLS |
+
+`@supabase/supabase-js` 2.114 reconoce el formato nuevo de forma nativa
+(`isNewApiKey`), así que no hace falta ninguna adaptación.
+
+### Publishable Key
+
+Es la que usan el cliente del navegador y el cliente de sesión del servidor. Es
+**pública por diseño**: viaja al navegador sin problema porque no autoriza nada.
+Quien decide qué se puede leer y escribir es RLS combinada con la sesión.
+
+### Secret Key
+
+Vive en **un único módulo**: [lib/supabase/secret.ts](../lib/supabase/secret.ts),
+marcado `server-only`, y se usa desde **un único sitio**:
+[scripts/bootstrap-member.ts](../scripts/bootstrap-member.ts), para dar de alta
+al primer miembro. Es la única operación que RLS no permite por diseño: si el
+cliente pudiera escribir en `cfo_members`, cualquiera se autorizaría a sí mismo.
+
+Todo lo demás —subir, leer, procesar, persistir— usa el cliente de sesión, así
+que **RLS es la barrera real** y no depende de que el código recuerde filtrar.
 
 Nunca: en cliente, con prefijo `NEXT_PUBLIC_`, en logs, en respuestas de error ni
-en Git.
+en Git. Los tests lo verifican, incluida la ausencia en `.next/static`.
 
 ---
 

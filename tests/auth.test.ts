@@ -42,7 +42,7 @@ beforeEach(() => {
   session.user = null;
   session.member = null;
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://ejemplo.supabase.co";
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "clave-publica-de-ejemplo";
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_ejemplo";
   delete process.env.ANTIFRAGIL_CFO_LOCAL_MODE;
 });
 
@@ -144,7 +144,7 @@ describe("miembro de solo lectura", () => {
 describe("sin Supabase configurado", () => {
   beforeEach(() => {
     delete process.env.NEXT_PUBLIC_SUPABASE_URL;
-    delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    delete process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
   });
 
   it("no deja pasar a nadie por defecto (fail-closed)", async () => {

@@ -447,7 +447,7 @@ alter table public.close_comparisons    enable row level security;
 alter table public.audit_events         enable row level security;
 
 -- Cada usuario puede comprobar su propia pertenencia. Alta y baja de miembros
--- son operaciones de servidor (service_role), nunca del cliente.
+-- son operaciones de servidor (Secret Key), nunca del cliente.
 create policy cfo_members_self_read on public.cfo_members
   for select using (user_id = auth.uid());
 

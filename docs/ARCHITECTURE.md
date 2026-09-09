@@ -13,6 +13,7 @@ Todo lo que sigue está al servicio de eso.
 | Estilos | Tailwind CSS v4 | D10 |
 | Base de datos | Supabase / PostgreSQL | D6 |
 | Auth | Supabase Auth + SSR + RLS | D7/D47 |
+| API keys | Sistema moderno: `sb_publishable_…` / `sb_secret_…` | Las claves legacy `anon` y `service_role` están siendo retiradas por Supabase |
 | Validación | Zod | D11 |
 | Hosting | Vercel | D8 |
 | Package manager | npm | D9 |
@@ -220,7 +221,7 @@ Detalle completo, incluida la auditoría del 15 de septiembre: [SECURITY.md](./S
 - **Cuatro capas independientes**: middleware → guard de servidor → RLS → políticas de Storage.
 - **Autorización por pertenencia** a `cfo_members`, no por estar autenticado.
 - **Fail-closed**: sin Supabase configurado no se sirve nada; el modo local exige variable explícita y no-producción.
-- **La aplicación opera con el cliente de sesión**, así que RLS es la barrera real. `service_role` se usa solo en `scripts/bootstrap-member.ts`.
+- **La aplicación opera con el cliente de sesión** (Publishable Key + cookie), así que RLS es la barrera real. La **Secret Key** se usa solo en `scripts/bootstrap-member.ts`.
 - **Sin políticas de DELETE**, salvo el recálculo del motor (asociaciones e incidencias abiertas).
 - **`server-only`** en todo módulo con credenciales: el build falla si alguien lo arrastra al cliente.
 - **Cabeceras**: CSP, X-Frame-Options DENY, nosniff, Referrer-Policy, Permissions-Policy y HSTS en producción.

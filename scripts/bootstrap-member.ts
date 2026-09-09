@@ -6,14 +6,14 @@
  *
  * Registrarse en Supabase Auth NO da acceso a nada: hace falta una fila en
  * `cfo_members`. Esa tabla no se puede escribir desde el cliente (por diseño),
- * así que esta es la única vía, y usa la service_role.
+ * así que esta es la única vía, y usa la Secret Key (`sb_secret_…`).
  *
- * Es EL ÚNICO sitio del proyecto donde se usa el cliente privilegiado: es una
- * tarea de sistema que se ejecuta desde la máquina del administrador, nunca
- * desde una petición web.
+ * Es EL ÚNICO sitio del proyecto donde se usa la Secret Key: es una tarea de
+ * sistema que se ejecuta desde la máquina del administrador, nunca desde una
+ * petición web. La operativa financiera va siempre con la sesión del usuario.
  */
 
-import { createClient } from "@supabase/supabase-js";
+import { createSecretClient } from "../lib/supabase/secret";
 
 async function main(): Promise<number> {
   const [email, role = "owner"] = process.argv.slice(2);
@@ -27,20 +27,17 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!url || !serviceRoleKey) {
+  let supabase;
+  try {
+    supabase = createSecretClient();
+  } catch {
+    // El mensaje habla de la ausencia de la clave, nunca de su valor.
     console.error(
-      "Faltan NEXT_PUBLIC_SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY en el entorno.\n" +
+      "Faltan NEXT_PUBLIC_SUPABASE_URL o SUPABASE_SECRET_KEY en el entorno.\n" +
         "Ejecuta el comando con el archivo .env.local cargado.",
     );
     return 1;
   }
-
-  const supabase = createClient(url, serviceRoleKey, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
 
   // Se busca el usuario ya creado en Auth: este script autoriza, no registra.
   const { data, error } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });

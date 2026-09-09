@@ -136,7 +136,12 @@ Este repositorio es **público**. Nunca deben llegar a él:
 Todo dato real vive en `local-data/`, excluida por `.gitignore`.
 Los datos de test son **sintéticos**, siempre.
 
-`SUPABASE_SERVICE_ROLE_KEY` jamás se usa desde el cliente ni se prefija con `NEXT_PUBLIC_`.
+Se usa el sistema **moderno** de API keys de Supabase: `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+(pública, va al navegador) y `SUPABASE_SECRET_KEY` (privada, solo servidor).
+Las claves legacy `anon` y `service_role` están retiradas del proyecto.
+
+`SUPABASE_SECRET_KEY` jamás se usa desde el cliente, ni se prefija con `NEXT_PUBLIC_`,
+ni aparece en la operativa financiera normal: esa va con la sesión del usuario y RLS.
 
 ---
 

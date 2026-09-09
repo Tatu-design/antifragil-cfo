@@ -2,9 +2,12 @@
 
 Guía paso a paso. Sigue el orden; no hace falta decidir nada por el camino.
 
+Este proyecto usa el **sistema moderno de API keys** de Supabase
+(`sb_publishable_…` y `sb_secret_…`). Las claves antiguas `anon` y `service_role`
+están siendo retiradas y **no se usan aquí**.
+
 Al terminar tendrás: proyecto creado, esquema aplicado, bucket privado, tu
-usuario creado y autorizado, y la aplicación funcionando con datos reales
-persistentes.
+usuario creado y autorizado, y la aplicación funcionando con datos persistentes.
 
 ---
 
@@ -35,57 +38,64 @@ persistentes.
 
 ---
 
-## Paso 2 · Copiar las credenciales
+## Paso 2 · Copiar las dos claves nuevas
 
-1. En el menú lateral, abajo del todo: **Project Settings** (el icono de engranaje).
-2. Entra en **API keys** (o **API**, según la versión del panel).
-3. Verás:
+1. En el menú lateral, abajo del todo: **Project Settings** (icono de engranaje).
+2. Entra en **API Keys**.
+3. Verás dos pestañas o secciones. La que necesitas es la de las claves nuevas:
 
-   | Campo en Supabase | Para qué |
-   |---|---|
-   | **Project URL** | La dirección de tu proyecto |
-   | **anon / public** (o **Publishable key**) | Clave pública. Va al navegador. Es normal que se vea |
-   | **service_role** (o **Secret key**) | Clave con permisos totales. **Secreta** |
+   | En Supabase | Empieza por | Para qué |
+   |---|---|---|
+   | **Publishable key** | `sb_publishable_` | Clave pública. Va al navegador. Es normal que se vea |
+   | **Secret key** | `sb_secret_` | Permisos totales. **Secreta** |
 
-4. Para ver la `service_role` hay que pulsar **Reveal**.
+4. La **Publishable key** se ve directamente: cópiala.
+5. La **Secret key** está oculta: pulsa **Reveal** (o **Create new secret key** si
+   aún no hay ninguna) y cópiala.
 
-> ⚠️ **La `service_role` no se comparte con nadie, ni conmigo, ni por WhatsApp,
-> ni en capturas.** Salta todas las protecciones de la base de datos. Si alguna
-> vez se te escapa, ve a esa misma pantalla y pulsa **Reset/Rotate**.
+> **Si ves una sección "Legacy API keys" con `anon` y `service_role`: ignórala.**
+> Este proyecto no las usa. Si tu panel solo muestra esas, busca la pestaña
+> **API Keys → New API keys**; en proyectos creados hoy vienen activadas por
+> defecto.
+
+> ⚠️ **La Secret key no se comparte con nadie, ni conmigo, ni por WhatsApp, ni en
+> capturas.** Salta todas las protecciones de la base de datos. Si alguna vez se
+> te escapa, vuelve a esa pantalla y pulsa **Rotate** para invalidarla.
 >
-> La `anon` sí es pública por diseño: no da acceso a nada porque RLS la bloquea.
+> La Publishable key sí es pública por diseño: no da acceso a nada porque RLS la
+> bloquea.
 
 ---
 
 ## Paso 3 · Crear el archivo `.env.local`
 
-En la carpeta del proyecto, crea un archivo llamado `.env.local` (no lo subas a
-Git; ya está excluido) con este contenido, sustituyendo los valores:
+En la carpeta del proyecto, crea un archivo llamado `.env.local` (ya está
+excluido de Git) con este contenido, sustituyendo los valores:
 
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=https://xxxxxxxxxxxx.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=<pega aquí la clave anon / publishable>
-SUPABASE_SERVICE_ROLE_KEY=<pega aquí la service_role / secret>
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_xxxxxxxxxxxxxxxx
+SUPABASE_SECRET_KEY=sb_secret_xxxxxxxxxxxxxxxx
 ```
 
-- `NEXT_PUBLIC_SUPABASE_URL` → el **Project URL**.
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY` → la clave **anon/public**.
-- `SUPABASE_SERVICE_ROLE_KEY` → la **service_role**. Solo se usa para darte de alta.
+- `NEXT_PUBLIC_SUPABASE_URL` → el **Project URL** (en Project Settings → Data API).
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` → la **Publishable key**.
+- `SUPABASE_SECRET_KEY` → la **Secret key**. Solo se usa para darte de alta.
 
 ---
 
 ## Paso 4 · Aplicar las migraciones
 
-1. En el menú lateral de Supabase, abre **SQL Editor**.
+1. Menú lateral → **SQL Editor**.
 2. Pulsa **New query**.
-3. Abre el archivo `supabase/migrations/0001_financial_ledger.sql` del proyecto,
-   copia **todo** su contenido y pégalo en el editor.
+3. Abre `supabase/migrations/0001_financial_ledger.sql`, copia **todo** su
+   contenido y pégalo en el editor.
 4. Pulsa **Run** (o Ctrl+Enter). Debe decir *Success*.
 5. Repite con `supabase/migrations/0002_documents_storage.sql`: **New query**,
    pegar, **Run**.
 
-Para comprobarlo: menú lateral → **Table Editor**. Deben aparecer las tablas
-`cfo_members`, `documents`, `ledger_entries`, `periods`, `incidents` y el resto.
+Para comprobarlo: menú lateral → **Table Editor**. Deben aparecer `cfo_members`,
+`documents`, `ledger_entries`, `periods`, `incidents` y el resto.
 
 ---
 
@@ -93,7 +103,7 @@ Para comprobarlo: menú lateral → **Table Editor**. Deben aparecer las tablas
 
 1. Menú lateral → **Storage**.
 2. Debe existir un bucket llamado **documentos**.
-3. Comprueba que **NO** tiene la etiqueta `Public` al lado del nombre. Si la
+3. Comprueba que **NO** tiene la etiqueta `Public` junto al nombre. Si la
    tuviera, entra en el bucket → **Configuration** → desactiva *Public bucket*.
 
 ---
@@ -101,7 +111,7 @@ Para comprobarlo: menú lateral → **Table Editor**. Deben aparecer las tablas
 ## Paso 6 · Crear tu usuario
 
 1. Menú lateral → **Authentication** → **Users**.
-2. Pulsa **Add user** → **Create new user**.
+2. **Add user** → **Create new user**.
 3. Escribe tu email y una contraseña que recuerdes (mínimo 6 caracteres).
 4. Marca **Auto Confirm User** para no tener que confirmar por correo.
 5. Pulsa **Create user**.
@@ -119,6 +129,8 @@ npm run cfo:member -- tu-email@ejemplo.com owner
 
 Debe responder `✅ tu-email@ejemplo.com autorizado como owner.`
 
+Este es el **único** comando que usa la Secret key.
+
 ---
 
 ## Paso 8 · Comprobar que funciona
@@ -134,8 +146,8 @@ npm run dev
    debe rechazarte otra vez.
 
 Para comprobar la persistencia: para el servidor (Ctrl+C), arráncalo de nuevo y
-vuelve a entrar. Los datos siguen ahí. También puedes abrir la aplicación desde
-otro navegador con las mismas credenciales.
+vuelve a entrar. Los datos siguen ahí. También puedes abrirlo desde otro
+navegador con las mismas credenciales.
 
 ---
 
@@ -145,8 +157,11 @@ otro navegador con las mismas credenciales.
 
 **Entras pero dice que no tienes acceso** → falta el paso 7.
 
-**"Faltan NEXT_PUBLIC_SUPABASE_URL..."** → revisa `.env.local` y reinicia `npm run dev`
-(los cambios de entorno solo se leen al arrancar).
+**"Faltan NEXT_PUBLIC_SUPABASE_URL o SUPABASE_SECRET_KEY"** → revisa `.env.local`
+y reinicia `npm run dev` (las variables solo se leen al arrancar).
+
+**"Invalid API key"** → comprueba que has copiado la clave entera y que la
+Publishable empieza por `sb_publishable_` y la Secret por `sb_secret_`.
 
 **Error de SQL al aplicar migraciones** → asegúrate de haber pegado el archivo
 entero y en orden: primero 0001 y después 0002.
@@ -156,5 +171,5 @@ entero y en orden: primero 0001 y después 0002.
 ## Despliegue en Vercel (más adelante)
 
 Las mismas tres variables van en **Project Settings → Environment Variables**.
-`SUPABASE_SERVICE_ROLE_KEY` solo en el entorno de servidor, nunca con prefijo
+`SUPABASE_SECRET_KEY` solo en el entorno de servidor y **nunca** con prefijo
 `NEXT_PUBLIC_`.

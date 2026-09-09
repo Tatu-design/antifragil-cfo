@@ -2,7 +2,7 @@
  * Tests de seguridad.
  *
  * Protegen las invariantes que, si se rompen, exponen información financiera:
- * que ninguna ruta sirva datos sin sesión, que el service_role no salga del
+ * que ninguna ruta sirva datos sin sesión, que la Secret Key no salga del
  * servidor y que el modo local no se active por accidente en producción.
  *
  * Estos tests leen el código fuente a propósito. Un test que dependa de que el
@@ -86,7 +86,7 @@ describe("todas las rutas de API exigen autorización", () => {
   });
 });
 
-describe("el service_role no sale del servidor", () => {
+describe("la Secret Key no sale del servidor", () => {
   it("nunca se prefija con NEXT_PUBLIC_", async () => {
     const files = [
       ...(await walk(path.join(ROOT, "lib"))),
@@ -95,10 +95,12 @@ describe("el service_role no sale del servidor", () => {
 
     for (const file of files) {
       const source = await readFile(file, "utf8");
-      expect(source, `${path.relative(ROOT, file)} expone la service_role`).not.toContain(
-        "NEXT_PUBLIC_SUPABASE_SERVICE",
+      expect(source, `${path.relative(ROOT, file)} expone la Secret Key`).not.toContain(
+        "NEXT_PUBLIC_SUPABASE_SECRET",
       );
-      expect(source).not.toContain("NEXT_PUBLIC_SERVICE_ROLE");
+      // Y tampoco reaparecen las variables legacy que este proyecto no usa.
+      expect(source).not.toContain("SUPABASE_SERVICE_ROLE_KEY");
+      expect(source).not.toContain("NEXT_PUBLIC_SUPABASE_ANON_KEY");
     }
   });
 
@@ -110,17 +112,17 @@ describe("el service_role no sale del servidor", () => {
 
     for (const file of files) {
       const source = await readFile(file, "utf8");
-      if (!source.includes("SUPABASE_SERVICE_ROLE_KEY")) continue;
+      if (!source.includes("SUPABASE_SECRET_KEY")) continue;
 
       const relative = path.relative(ROOT, file);
-      expect(source, `${relative} usa service_role sin server-only`).toContain('import "server-only"');
-      expect(source, `${relative} usa service_role en un Client Component`).not.toContain(
+      expect(source, `${relative} usa la Secret Key sin server-only`).toContain('import "server-only"');
+      expect(source, `${relative} usa la Secret Key en un Client Component`).not.toContain(
         '"use client"',
       );
     }
   });
 
-  it("ningún Client Component importa el cliente privilegiado", async () => {
+  it("ningún Client Component importa el cliente de Secret Key", async () => {
     const files = [
       ...(await walk(path.join(ROOT, "lib"))),
       ...(await walk(path.join(ROOT, "app"))),
@@ -131,26 +133,104 @@ describe("el service_role no sale del servidor", () => {
       if (!source.trimStart().startsWith('"use client"')) continue;
 
       const relative = path.relative(ROOT, file);
-      expect(source, `${relative} importa el cliente admin`).not.toContain("supabase/admin");
+      expect(source, `${relative} importa el cliente de Secret Key`).not.toContain("supabase/secret");
       expect(source, `${relative} importa el repositorio de servidor`).not.toContain(
         "@/lib/repositories",
       );
     }
   });
 
-  it("el cliente privilegiado no se usa en la operativa normal", async () => {
+  it("la Secret Key no se usa en la operativa normal", async () => {
     const files = await walk(path.join(ROOT, "lib"));
-    const users = files.filter((file) => !file.endsWith(path.join("supabase", "admin.ts")));
+    const users = files.filter((file) => !file.endsWith(path.join("supabase", "secret.ts")));
 
-    const withAdmin: string[] = [];
+    const withSecret: string[] = [];
     for (const file of users) {
       const source = await readFile(file, "utf8");
-      if (source.includes("createAdminClient")) withAdmin.push(path.relative(ROOT, file));
+      if (source.includes("createSecretClient")) withSecret.push(path.relative(ROOT, file));
     }
 
     // La subida, la lectura y la persistencia van con el cliente de sesión, de
-    // forma que RLS es quien autoriza. El admin queda para tareas de sistema.
-    expect(withAdmin).toEqual([]);
+    // forma que RLS es quien autoriza. La Secret Key queda para tareas de sistema.
+    expect(withSecret).toEqual([]);
+  });
+});
+
+describe("sistema moderno de API keys", () => {
+  it("solo se usan las variables del sistema nuevo", async () => {
+    const files = [
+      ...(await walk(path.join(ROOT, "lib"))),
+      ...(await walk(path.join(ROOT, "app"))),
+      ...(await walk(path.join(ROOT, "scripts"))),
+      path.join(ROOT, "proxy.ts"),
+    ];
+
+    for (const file of files) {
+      const source = await readFile(file, "utf8");
+      const relative = path.relative(ROOT, file);
+
+      // Las claves legacy (anon / service_role) están siendo retiradas por
+      // Supabase y este proyecto no las usa en ningún sitio.
+      expect(source, `${relative} usa la anon key legacy`).not.toContain(
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+      );
+      expect(source, `${relative} usa la service_role legacy`).not.toContain(
+        "SUPABASE_SERVICE_ROLE_KEY",
+      );
+    }
+  });
+
+  it("la Publishable Key es la que llega al navegador", async () => {
+    const browser = await readFile(path.join(ROOT, "lib", "supabase", "client.ts"), "utf8");
+    const server = await readFile(path.join(ROOT, "lib", "supabase", "server.ts"), "utf8");
+
+    // Es pública por diseño: puede ir al cliente porque no autoriza nada sola.
+    expect(browser).toContain("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY");
+    expect(browser).not.toContain("SUPABASE_SECRET_KEY");
+
+    // El cliente de sesión usa la misma clave pública más la cookie.
+    expect(server).toContain("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY");
+    expect(server).not.toContain("SUPABASE_SECRET_KEY");
+  });
+
+  it("la Secret Key vive en un único módulo server-only", async () => {
+    const files = [
+      ...(await walk(path.join(ROOT, "lib"))),
+      ...(await walk(path.join(ROOT, "app"))),
+      path.join(ROOT, "proxy.ts"),
+    ];
+
+    const holders: string[] = [];
+    for (const file of files) {
+      const source = await readFile(file, "utf8");
+      if (source.includes("SUPABASE_SECRET_KEY")) holders.push(path.relative(ROOT, file));
+    }
+
+    expect(holders).toEqual([path.join("lib", "supabase", "secret.ts")]);
+  });
+
+  it("el SDK instalado reconoce el formato de clave nuevo", async () => {
+    const sdk = await readFile(
+      path.join(ROOT, "node_modules", "@supabase", "supabase-js", "dist", "index.cjs"),
+      "utf8",
+    );
+
+    // supabase-js distingue explícitamente las claves sb_publishable_ / sb_secret_.
+    expect(sdk).toContain("sb_publishable_");
+    expect(sdk).toContain("sb_secret_");
+  });
+
+  it("los errores no filtran el valor de ninguna clave", async () => {
+    const secret = await readFile(path.join(ROOT, "lib", "supabase", "secret.ts"), "utf8");
+    const api = await readFile(path.join(ROOT, "lib", "auth", "api.ts"), "utf8");
+
+    // El mensaje habla de la ausencia de la variable, nunca de su contenido.
+    expect(secret).toContain("El cliente administrativo no puede crearse");
+    expect(secret).not.toMatch(/\$\{secretKey\}|\+ secretKey/);
+
+    // Y las respuestas de error de la API son genéricas.
+    expect(api).toContain("safeError");
+    expect(api).toMatch(/NextResponse\.json\(\{ error: fallback \}/);
   });
 });
 
@@ -159,7 +239,7 @@ describe("modo local de desarrollo", () => {
 
   beforeEach(() => {
     delete process.env.NEXT_PUBLIC_SUPABASE_URL;
-    delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    delete process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
     delete process.env.ANTIFRAGIL_CFO_LOCAL_MODE;
   });
 
@@ -180,7 +260,7 @@ describe("modo local de desarrollo", () => {
   it("nunca se activa si Supabase está configurado", () => {
     process.env.ANTIFRAGIL_CFO_LOCAL_MODE = "1";
     process.env.NEXT_PUBLIC_SUPABASE_URL = "https://ejemplo.supabase.co";
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "clave-publica-de-ejemplo";
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "sb_publishable_ejemplo";
 
     expect(isSupabaseConfigured()).toBe(true);
     expect(isLocalDevMode()).toBe(false);
@@ -201,7 +281,7 @@ describe("secretos fuera del repositorio", () => {
     const example = await readFile(path.join(ROOT, ".env.example"), "utf8");
 
     expect(example).toContain("NEXT_PUBLIC_SUPABASE_URL");
-    expect(example).toContain("SUPABASE_SERVICE_ROLE_KEY");
+    expect(example).toContain("SUPABASE_SECRET_KEY");
     // Un JWT real empieza por "eyJ": si aparece, se ha colado una clave.
     expect(example).not.toMatch(/eyJ[A-Za-z0-9_-]{20,}/);
   });

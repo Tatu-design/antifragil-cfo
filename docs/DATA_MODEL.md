@@ -197,7 +197,7 @@ Restricciones que garantizan la idempotencia sin depender del código:
 
 | Tabla | Lectura | Escritura |
 |-------|---------|-----------|
-| `cfo_members` | Solo la propia fila | Solo servidor (`service_role`) |
+| `cfo_members` | Solo la propia fila | Solo servidor (Secret Key) |
 | Resto de tablas de datos | Cualquier miembro | Solo `owner` / `editor` |
 | `audit_events` | Cualquier miembro | Solo servidor |
 

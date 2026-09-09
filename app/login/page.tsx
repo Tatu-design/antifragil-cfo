@@ -39,7 +39,7 @@ export default async function LoginPage() {
           <p className="mt-2">
             {localDev
               ? "El modo local de desarrollo está activo: la aplicación funciona sin autenticación con datos sintéticos."
-              : "Configura NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY en .env.local. Sin ellas, la aplicación no da acceso a nada."}
+              : "Configura NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY en .env.local. Sin ellas, la aplicación no da acceso a nada."}
           </p>
         </div>
       )}
