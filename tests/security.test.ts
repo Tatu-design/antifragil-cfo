@@ -220,6 +220,27 @@ describe("sistema moderno de API keys", () => {
     expect(sdk).toContain("sb_secret_");
   });
 
+  it("el access token de administración no toca el runtime web", async () => {
+    const runtime = [
+      ...(await walk(path.join(ROOT, "lib"))),
+      ...(await walk(path.join(ROOT, "app"))),
+      path.join(ROOT, "proxy.ts"),
+    ];
+
+    // Es un token de la Management API: puede reescribir el esquema entero.
+    // Solo tiene sentido en scripts ejecutados a mano por el administrador.
+    for (const file of runtime) {
+      const source = await readFile(file, "utf8");
+      expect(source, `${path.relative(ROOT, file)} usa el access token`).not.toContain(
+        "SUPABASE_ACCESS_TOKEN",
+      );
+    }
+
+    // Y nunca se imprime: los mensajes hablan del nombre de la variable.
+    const script = await readFile(path.join(ROOT, "scripts", "apply-migrations.ts"), "utf8");
+    expect(script).not.toMatch(/console\.(log|error)\([^)]*token[^)]*\)/);
+  });
+
   it("los errores no filtran el valor de ninguna clave", async () => {
     const secret = await readFile(path.join(ROOT, "lib", "supabase", "secret.ts"), "utf8");
     const api = await readFile(path.join(ROOT, "lib", "auth", "api.ts"), "utf8");

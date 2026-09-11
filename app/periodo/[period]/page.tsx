@@ -7,6 +7,7 @@ import { buildPeriodView } from "@/lib/finance/period-view";
 import { QUEUE_LABELS } from "@/lib/finance/review-queue";
 import type { ReconciliationStatus } from "@/lib/finance/types";
 import { loadPeriodDocuments, loadPeriodLedger } from "@/lib/repositories";
+import { CompareButton } from "./CompareButton";
 import { DropZone } from "./DropZone";
 import { PendingDocuments } from "./PendingDocuments";
 import { ProcessButton } from "./ProcessButton";
@@ -58,6 +59,9 @@ export default async function PeriodPage({
     }));
 
   const view = ledger ? buildPeriodView(ledger) : null;
+  // La comparación solo tiene sentido si hay un cierre manual subido y un mes ya
+  // procesado contra el que contrastarlo.
+  const hasManualClose = registry.documents.some((d) => d.kind === "manual");
 
   return (
     <main className="mx-auto w-full max-w-6xl flex-1 space-y-10 px-6 py-10">
@@ -92,6 +96,8 @@ export default async function PeriodPage({
       </section>
 
       <PendingDocuments period={period} documents={pendingDocuments} />
+
+      {view && hasManualClose && <CompareButton period={period} />}
 
       {!view && (
         <p className="rounded-lg border border-neutral-200 p-4 text-sm text-neutral-600 dark:border-neutral-800 dark:text-neutral-400">

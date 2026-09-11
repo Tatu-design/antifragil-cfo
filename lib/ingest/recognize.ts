@@ -94,7 +94,8 @@ export function recognizeFile(input: RecognitionInput, fallbackPeriod: string): 
       kind: source.kind,
       accountId: source.accountId,
       period: period ?? fallbackPeriod,
-      docType: source.kind === "cash_account" ? "other" : "sales_sheet",
+      docType:
+        source.kind === "cash_account" || source.kind === "manual" ? "other" : "sales_sheet",
       amountCents,
       confidence: source.confidence,
       reasons,
@@ -158,6 +159,18 @@ function detectMovementSource(
       reasons.push("el nombre indica ventas de clínica cobradas en efectivo");
       return { kind: "clinic_cash_sales", accountId: null, confidence: 0.95 };
     }
+  }
+
+  // Cierre manual previo del mes. NO es una fuente de movimientos: es el
+  // documento con el que se compara lo que reconstruye el motor. Se comprueba
+  // antes que la cuenta de cash porque su nombre también menciona "cash flow".
+  if (
+    (name.includes("cash flow") || name.includes("cashflow")) ||
+    name.includes("cierre manual") ||
+    (name.includes("gea") && name.includes("cash"))
+  ) {
+    reasons.push("el nombre apunta al Cash Flow histórico (cierre manual)");
+    return { kind: "manual", accountId: null, confidence: 0.9 };
   }
 
   if (name.includes("cuenta de cash") || name.includes("cuenta cash") || name.includes("caja")) {
