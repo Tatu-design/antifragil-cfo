@@ -88,3 +88,6 @@ yarn-error.log*
 
 # --- claude local -----------------------------------------------------------
 .claude/settings.local.json
+
+# temporales del CLI de Supabase
+supabase/.temp/
