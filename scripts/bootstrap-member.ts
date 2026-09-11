@@ -13,7 +13,7 @@
  * petición web. La operativa financiera va siempre con la sesión del usuario.
  */
 
-import { createSecretClient } from "../lib/supabase/secret";
+import { createAdminClient } from "./supabase-admin";
 
 async function main(): Promise<number> {
   const [email, role = "owner"] = process.argv.slice(2);
@@ -29,7 +29,7 @@ async function main(): Promise<number> {
 
   let supabase;
   try {
-    supabase = createSecretClient();
+    supabase = createAdminClient();
   } catch {
     // El mensaje habla de la ausencia de la clave, nunca de su valor.
     console.error(

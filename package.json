@@ -13,7 +13,10 @@
     "cfo": "tsx scripts/cfo.ts",
     "check": "npm run typecheck && npm run lint && npm run test",
     "cfo:member": "tsx --env-file=.env.local scripts/bootstrap-member.ts",
-    "cfo:migrate": "tsx --env-file=.env.local scripts/apply-migrations.ts"
+    "cfo:migrate": "tsx --env-file=.env.local scripts/apply-migrations.ts",
+    "cfo:user": "tsx --env-file=.env.local scripts/create-user.ts",
+    "cfo:smoke": "tsx --env-file=.env.local scripts/smoke-test.ts",
+    "cfo:reset": "tsx --env-file=.env.local scripts/reset-period.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

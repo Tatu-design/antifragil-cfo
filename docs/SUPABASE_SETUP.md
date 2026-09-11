@@ -86,16 +86,30 @@ SUPABASE_SECRET_KEY=sb_secret_xxxxxxxxxxxxxxxx
 
 ## Paso 4 · Aplicar las migraciones
 
-1. Menú lateral → **SQL Editor**.
-2. Pulsa **New query**.
-3. Abre `supabase/migrations/0001_financial_ledger.sql`, copia **todo** su
-   contenido y pégalo en el editor.
-4. Pulsa **Run** (o Ctrl+Enter). Debe decir *Success*.
-5. Repite con `supabase/migrations/0002_documents_storage.sql`: **New query**,
-   pegar, **Run**.
+Desde la terminal, sin copiar SQL a mano. Hace falta un **Personal Access Token**
+porque las claves de API (Publishable y Secret) no dan acceso SQL, y es correcto
+que no lo den.
 
-Para comprobarlo: menú lateral → **Table Editor**. Deben aparecer `cfo_members`,
-`documents`, `ledger_entries`, `periods`, `incidents` y el resto.
+1. Abre **https://supabase.com/dashboard/account/tokens** → **Generate new token**.
+2. Nombre: `antifragil-cfo-migraciones`. Cópialo (empieza por `sbp_`).
+3. Añádelo a `.env.local`:
+
+   ```bash
+   SUPABASE_ACCESS_TOKEN=sbp_...
+   ```
+
+4. Ejecuta:
+
+   ```bash
+   npm run cfo:migrate
+   ```
+
+Aplica las migraciones en orden y verifica el resultado: tablas, RLS, políticas,
+bucket privado, restricciones, índices, cuentas y funciones de autorización. Si
+algo falla, se detiene y lo dice.
+
+Cuando termines puedes **revocar el token** desde esa misma página: la aplicación
+no lo necesita para funcionar.
 
 ---
 
@@ -110,11 +124,17 @@ Para comprobarlo: menú lateral → **Table Editor**. Deben aparecer `cfo_member
 
 ## Paso 6 · Crear tu usuario
 
-1. Menú lateral → **Authentication** → **Users**.
-2. **Add user** → **Create new user**.
-3. Escribe tu email y una contraseña que recuerdes (mínimo 6 caracteres).
-4. Marca **Auto Confirm User** para no tener que confirmar por correo.
-5. Pulsa **Create user**.
+Desde la terminal:
+
+```bash
+npm run cfo:user -- tu-email@ejemplo.com
+```
+
+Crea el usuario con una contraseña temporal que se muestra una sola vez.
+Cámbiala tras el primer acceso desde Supabase → Authentication → Users.
+
+Si prefieres hacerlo a mano: **Authentication → Users → Add user → Create new
+user**, marcando **Auto Confirm User**.
 
 ---
 
@@ -129,11 +149,30 @@ npm run cfo:member -- tu-email@ejemplo.com owner
 
 Debe responder `✅ tu-email@ejemplo.com autorizado como owner.`
 
-Este es el **único** comando que usa la Secret key.
+Este comando y `cfo:user` son los únicos que usan la Secret key.
 
 ---
 
 ## Paso 8 · Comprobar que funciona
+
+Comprobación automática de todo el flujo, con datos sintéticos:
+
+```bash
+npm run build && npx next start -p 3000
+npm run cfo:smoke -- http://localhost:3000 tu-email@ejemplo.com tu-contraseña
+```
+
+Recorre: sin sesión todo cerrado → login → subir → procesar → ver el mes → abrir
+un documento → persistencia en PostgreSQL y Storage → cerrar sesión y volver a
+comprobar el bloqueo.
+
+Para limpiar lo que deje esa prueba:
+
+```bash
+npm run cfo:reset -- 2026-09
+```
+
+Y la comprobación a mano:
 
 ```bash
 npm run dev
@@ -163,8 +202,9 @@ y reinicia `npm run dev` (las variables solo se leen al arrancar).
 **"Invalid API key"** → comprueba que has copiado la clave entera y que la
 Publishable empieza por `sb_publishable_` y la Secret por `sb_secret_`.
 
-**Error de SQL al aplicar migraciones** → asegúrate de haber pegado el archivo
-entero y en orden: primero 0001 y después 0002.
+**Error al aplicar migraciones** → si dice que algo "ya existe", el esquema
+estaba aplicado a medias: revísalo antes de repetir. Si falta el token, añade
+`SUPABASE_ACCESS_TOKEN` a `.env.local`.
 
 ---
 

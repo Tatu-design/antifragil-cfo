@@ -155,6 +155,16 @@ npm run cfo -- compare 2026-08   # contrastar un mes con su cierre manual previo
 npm run cfo -- demo              # el motor sobre datos sintéticos
 ```
 
+Administración de Supabase (desde la máquina del administrador):
+
+```bash
+npm run cfo:migrate              # aplicar y verificar migraciones
+npm run cfo:user -- correo@x.com # crear usuario con contraseña temporal
+npm run cfo:member -- correo@x.com owner   # autorizar en cfo_members
+npm run cfo:smoke -- http://localhost:3000 correo@x.com contraseña
+npm run cfo:reset -- 2026-09     # vaciar un periodo (solo para pruebas)
+```
+
 Antes de tocar código:
 
 ```bash
