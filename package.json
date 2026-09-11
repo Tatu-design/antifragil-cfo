@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "cfo": "tsx scripts/cfo.ts",
     "check": "npm run typecheck && npm run lint && npm run test",
-    "cfo:member": "tsx --env-file=.env.local scripts/bootstrap-member.ts"
+    "cfo:member": "tsx --env-file=.env.local scripts/bootstrap-member.ts",
+    "cfo:migrate": "tsx --env-file=.env.local scripts/apply-migrations.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",
